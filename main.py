@@ -26,57 +26,37 @@ from database import (
     criar_tabelas,
     cadastrar_conta,
     listar_contas,
-    listar_servicos_distintos,
-    listar_tags_distintas,
     buscar_conta,
     buscar_contas_por_termo,
     atualizar_campo_conta,
     definir_status_conta,
     marcar_conta_verificada,
-    marcar_varias_verificadas,
-    obter_ultima_verificacao_resultado,
-    listar_historico_verificacoes,
     excluir_conta,
     listar_contas_para_verificar,
     contar_contas,
-    resumo_custos,
     definir_configuracao,
     obter_configuracao,
 )
 
 
 # =========================================================
-# CONFIGURAÃ‡Ã•ES GERAIS
+# CONFIGURAÇÕES GERAIS
 # =========================================================
 
 INTERVALO_PADRAO_DIAS = 30
 INTERVALO_CHECAGEM_LOOP = 6 * 60 * 60  # a cada 6h
 VERIFICADOR_TASK = "verificador_contas_task"
-CONTAS_POR_PAGINA = 8
 
 CAMPOS_CADASTRO = [
-    ("servico", "ðŸ“º ServiÃ§o (ex: Netflix, Disney+)"),
-    ("email", "ðŸ“§ Email/login"),
-    ("senha", "ðŸ”‘ Senha"),
-    ("data_criacao", "ðŸ—“ï¸ Data de criaÃ§Ã£o (ex: 08/08/2026, ou envie \"pular\")"),
-    ("custo_criacao", "ðŸ’° Custo de criaÃ§Ã£o (ex: 15.00, ou envie \"pular\")"),
-    ("fornecedor", "ðŸ·ï¸ Fornecedor/origem (ou envie \"pular\")"),
-    ("telas_perfis", "ðŸ–¥ï¸ Telas/perfis jÃ¡ usados (ou envie \"pular\")"),
-    ("observacoes", "ðŸ“ ObservaÃ§Ãµes gerais (ou envie \"pular\")"),
-    ("tags", "ðŸ·ï¸ Tags (ex: vip, revisar â€” separadas por vÃ­rgula, ou envie \"pular\")"),
+    ("servico", "📺 Serviço (ex: Netflix, Disney+)"),
+    ("email", "📧 Email/login"),
+    ("senha", "🔑 Senha"),
+    ("data_criacao", "🗓️ Data de criação (ex: 08/08/2026, ou envie \"pular\")"),
+    ("custo_criacao", "💰 Custo de criação (ex: 15.00, ou envie \"pular\")"),
+    ("fornecedor", "🏷️ Fornecedor/origem (ou envie \"pular\")"),
+    ("telas_perfis", "🖥️ Telas/perfis já usados (ou envie \"pular\")"),
+    ("observacoes", "📝 Observações gerais (ou envie \"pular\")"),
 ]
-
-NOMES_CAMPOS = {
-    "servico": "ServiÃ§o",
-    "email": "Email/login",
-    "senha": "Senha",
-    "data_criacao": "Data de criaÃ§Ã£o",
-    "custo_criacao": "Custo de criaÃ§Ã£o",
-    "fornecedor": "Fornecedor",
-    "telas_perfis": "Telas/perfis",
-    "observacoes": "ObservaÃ§Ãµes",
-    "tags": "Tags",
-}
 
 
 def is_admin(user_id):
@@ -99,21 +79,19 @@ async def start(
     if not usuario or not is_admin(usuario.id):
         if update.message:
             await update.message.reply_text(
-                "âŒ Este bot Ã© de uso pessoal."
+                "❌ Este bot é de uso pessoal."
             )
         return
 
     context.user_data.clear()
 
     total, ativas = contar_contas()
-    total_gasto = resumo_custos()["total_gasto"]
 
     texto = (
-        "ðŸ—‚ï¸ *GERENCIADOR DE CONTAS*\n\n"
-        f"ðŸ“¦ Total cadastradas: {total}\n"
-        f"âœ… Ativas: {ativas}\n"
-        f"ðŸ’° Investido: R$ {total_gasto:.2f}\n\n"
-        "Escolha uma opÃ§Ã£o:"
+        "🗂️ *GERENCIADOR DE CONTAS*\n\n"
+        f"📦 Total cadastradas: {total}\n"
+        f"✅ Ativas: {ativas}\n\n"
+        "Escolha uma opção:"
     )
 
     if update.message:
@@ -129,43 +107,25 @@ def menu_principal():
         [
             [
                 InlineKeyboardButton(
-                    "âž• NOVA CONTA",
+                    "➕ NOVA CONTA",
                     callback_data="nova_conta",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    "ðŸ“‹ LISTAR CONTAS",
+                    "📋 LISTAR CONTAS",
                     callback_data="listar_1",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    "ðŸ”½ FILTRAR CONTAS",
-                    callback_data="filtro_menu",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    "â˜‘ï¸ VERIFICAÃ‡ÃƒO EM LOTE",
-                    callback_data="lote_iniciar",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    "ðŸ” BUSCAR",
+                    "🔍 BUSCAR",
                     callback_data="buscar",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    "ðŸ’° RESUMO DE CUSTOS",
-                    callback_data="resumo_custos",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    "âš™ï¸ INTERVALO DE VERIFICAÃ‡ÃƒO",
+                    "⚙️ INTERVALO DE VERIFICAÇÃO",
                     callback_data="config_intervalo",
                 )
             ],
@@ -188,13 +148,13 @@ async def iniciar_nova_conta(
     campo, pergunta = CAMPOS_CADASTRO[0]
 
     await query.edit_message_text(
-        "âž• *NOVA CONTA*\n\n"
+        "➕ *NOVA CONTA*\n\n"
         f"{pergunta}",
         reply_markup=InlineKeyboardMarkup(
             [
                 [
                     InlineKeyboardButton(
-                        "âŒ CANCELAR",
+                        "❌ CANCELAR",
                         callback_data="cancelar_cadastro",
                     )
                 ]
@@ -226,7 +186,7 @@ async def processar_passo_cadastro(
             valor = float(texto.replace(",", "."))
         except ValueError:
             await update.message.reply_text(
-                "âŒ Digite um nÃºmero vÃ¡lido "
+                "❌ Digite um número válido "
                 "(ex: 15.00) ou \"pular\"."
             )
             return True
@@ -249,7 +209,7 @@ async def processar_passo_cadastro(
                 [
                     [
                         InlineKeyboardButton(
-                            "âŒ CANCELAR",
+                            "❌ CANCELAR",
                             callback_data="cancelar_cadastro",
                         )
                     ]
@@ -258,7 +218,7 @@ async def processar_passo_cadastro(
         )
         return True
 
-    # Ãšltimo passo: salva no banco.
+    # Último passo: salva no banco.
     dados = context.user_data["cadastro_dados"]
 
     conta_id = cadastrar_conta(
@@ -270,26 +230,25 @@ async def processar_passo_cadastro(
         fornecedor=dados.get("fornecedor"),
         telas_perfis=dados.get("telas_perfis"),
         observacoes=dados.get("observacoes"),
-        tags=dados.get("tags"),
     )
 
     context.user_data.clear()
 
     await update.message.reply_text(
-        "âœ… *CONTA CADASTRADA!*\n\n"
-        f"ðŸ†” ID: `{conta_id}`\n"
-        f"ðŸ“º ServiÃ§o: {dados.get('servico')}",
+        "✅ *CONTA CADASTRADA!*\n\n"
+        f"🆔 ID: `{conta_id}`\n"
+        f"📺 Serviço: {dados.get('servico')}",
         reply_markup=InlineKeyboardMarkup(
             [
                 [
                     InlineKeyboardButton(
-                        "ðŸ“¦ Ver conta",
+                        "📦 Ver conta",
                         callback_data=f"conta_{conta_id}",
                     )
                 ],
                 [
                     InlineKeyboardButton(
-                        "ðŸ  Menu",
+                        "🏠 Menu",
                         callback_data="menu",
                     )
                 ],
@@ -302,287 +261,37 @@ async def processar_passo_cadastro(
 
 
 # =========================================================
-# FILTROS DA LISTAGEM
+# LISTAR CONTAS (COM PAGINAÇÃO SIMPLES)
 # =========================================================
 
-def obter_contas_filtradas(context):
-    return listar_contas(
-        servico=context.user_data.get("filtro_servico"),
-        status=context.user_data.get("filtro_status"),
-        tag=context.user_data.get("filtro_tag"),
-    )
+CONTAS_POR_PAGINA = 8
 
-
-def descrever_filtros(context):
-    partes = []
-
-    if context.user_data.get("filtro_servico"):
-        partes.append(
-            f"ðŸ“º {context.user_data['filtro_servico']}"
-        )
-
-    if context.user_data.get("filtro_status"):
-        rotulo = (
-            "Ativas"
-            if context.user_data["filtro_status"] == "ativa"
-            else "Inativas"
-        )
-        partes.append(f"ðŸ“Š {rotulo}")
-
-    if context.user_data.get("filtro_tag"):
-        partes.append(
-            f"ðŸ·ï¸ {context.user_data['filtro_tag']}"
-        )
-
-    return " â€¢ ".join(partes)
-
-
-async def mostrar_filtro_menu(
-    query,
-    context,
-):
-    filtros_ativos = descrever_filtros(context)
-
-    botoes = [
-        [
-            InlineKeyboardButton(
-                "ðŸ“º Por serviÃ§o",
-                callback_data="filtroservico",
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                "ðŸ“Š Por status",
-                callback_data="filtrostatus",
-            )
-        ],
-    ]
-
-    if listar_tags_distintas():
-        botoes.append(
-            [
-                InlineKeyboardButton(
-                    "ðŸ·ï¸ Por tag",
-                    callback_data="filtrotag",
-                )
-            ]
-        )
-
-    if filtros_ativos:
-        botoes.append(
-            [
-                InlineKeyboardButton(
-                    "ðŸ§¹ Limpar filtros",
-                    callback_data="filtrolimpar",
-                )
-            ]
-        )
-
-    botoes.append(
-        [
-            InlineKeyboardButton(
-                "ðŸ“‹ Ver lista",
-                callback_data="listar_1",
-            )
-        ]
-    )
-    botoes.append(
-        [
-            InlineKeyboardButton(
-                "ðŸ  Menu",
-                callback_data="menu",
-            )
-        ]
-    )
-
-    texto = "ðŸ”½ *FILTRAR CONTAS*\n\n"
-
-    if filtros_ativos:
-        texto += f"Filtro(s) ativo(s): {filtros_ativos}\n\n"
-
-    texto += "Escolha como filtrar:"
-
-    await query.edit_message_text(
-        texto,
-        reply_markup=InlineKeyboardMarkup(
-            botoes
-        ),
-        parse_mode="Markdown",
-    )
-
-
-async def mostrar_filtro_servico(
-    query,
-    context,
-):
-    servicos = listar_servicos_distintos()
-
-    if not servicos:
-        await query.answer(
-            "âŒ Nenhum serviÃ§o cadastrado ainda.",
-            show_alert=True,
-        )
-        return
-
-    botoes = [
-        [
-            InlineKeyboardButton(
-                servico,
-                callback_data=f"setfiltroservico_{servico}",
-            )
-        ]
-        for servico in servicos
-    ]
-
-    botoes.append(
-        [
-            InlineKeyboardButton(
-                "â¬…ï¸ Voltar",
-                callback_data="filtro_menu",
-            )
-        ]
-    )
-
-    await query.edit_message_text(
-        "ðŸ“º *FILTRAR POR SERVIÃ‡O*\n\n"
-        "Escolha o serviÃ§o:",
-        reply_markup=InlineKeyboardMarkup(
-            botoes
-        ),
-        parse_mode="Markdown",
-    )
-
-
-async def mostrar_filtro_status(
-    query,
-    context,
-):
-    botoes = [
-        [
-            InlineKeyboardButton(
-                "âœ… SÃ³ ativas",
-                callback_data="setfiltrostatus_ativa",
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                "âš« SÃ³ inativas",
-                callback_data="setfiltrostatus_inativa",
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                "â¬…ï¸ Voltar",
-                callback_data="filtro_menu",
-            )
-        ],
-    ]
-
-    await query.edit_message_text(
-        "ðŸ“Š *FILTRAR POR STATUS*\n\n"
-        "Escolha o status:",
-        reply_markup=InlineKeyboardMarkup(
-            botoes
-        ),
-        parse_mode="Markdown",
-    )
-
-
-async def mostrar_filtro_tag(
-    query,
-    context,
-):
-    tags = listar_tags_distintas()
-
-    if not tags:
-        await query.answer(
-            "âŒ Nenhuma tag cadastrada ainda.",
-            show_alert=True,
-        )
-        return
-
-    botoes = [
-        [
-            InlineKeyboardButton(
-                f"ðŸ·ï¸ {tag}",
-                callback_data=f"setfiltrotag_{tag}",
-            )
-        ]
-        for tag in tags
-    ]
-
-    botoes.append(
-        [
-            InlineKeyboardButton(
-                "â¬…ï¸ Voltar",
-                callback_data="filtro_menu",
-            )
-        ]
-    )
-
-    await query.edit_message_text(
-        "ðŸ·ï¸ *FILTRAR POR TAG*\n\n"
-        "Escolha a tag:",
-        reply_markup=InlineKeyboardMarkup(
-            botoes
-        ),
-        parse_mode="Markdown",
-    )
-
-
-# =========================================================
-# LISTAR CONTAS (COM PAGINAÃ‡ÃƒO E FILTROS)
-# =========================================================
 
 async def mostrar_lista_contas(
     query,
-    context,
     pagina=1,
 ):
-    contas = obter_contas_filtradas(context)
-    filtros_ativos = descrever_filtros(context)
+    contas = listar_contas()
 
     if not contas:
-        texto = "ðŸ“‹ *LISTAR CONTAS*\n\n"
-
-        if filtros_ativos:
-            texto += f"Filtro(s): {filtros_ativos}\n\n"
-
-        texto += "Nenhuma conta encontrada."
-
-        botoes = []
-
-        if filtros_ativos:
-            botoes.append(
-                [
-                    InlineKeyboardButton(
-                        "ðŸ§¹ Limpar filtros",
-                        callback_data="filtrolimpar",
-                    )
-                ]
-            )
-
-        botoes.append(
-            [
-                InlineKeyboardButton(
-                    "âž• Nova conta",
-                    callback_data="nova_conta",
-                )
-            ]
-        )
-        botoes.append(
-            [
-                InlineKeyboardButton(
-                    "ðŸ  Menu",
-                    callback_data="menu",
-                )
-            ]
-        )
-
         await query.edit_message_text(
-            texto,
+            "📋 *LISTAR CONTAS*\n\n"
+            "Nenhuma conta cadastrada ainda.",
             reply_markup=InlineKeyboardMarkup(
-                botoes
+                [
+                    [
+                        InlineKeyboardButton(
+                            "➕ Nova conta",
+                            callback_data="nova_conta",
+                        )
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            "🏠 Menu",
+                            callback_data="menu",
+                        )
+                    ],
+                ]
             ),
             parse_mode="Markdown",
         )
@@ -604,7 +313,7 @@ async def mostrar_lista_contas(
         conta_id, servico, email, status = conta
 
         emoji_status = (
-            "âœ…" if status == "ativa" else "âš«"
+            "✅" if status == "ativa" else "⚫"
         )
 
         rotulo = f"{emoji_status} {servico}"
@@ -626,7 +335,7 @@ async def mostrar_lista_contas(
     if pagina > 1:
         navegacao.append(
             InlineKeyboardButton(
-                "â¬…ï¸",
+                "⬅️",
                 callback_data=f"listar_{pagina - 1}",
             )
         )
@@ -634,7 +343,7 @@ async def mostrar_lista_contas(
     if pagina < total_paginas:
         navegacao.append(
             InlineKeyboardButton(
-                "âž¡ï¸",
+                "➡️",
                 callback_data=f"listar_{pagina + 1}",
             )
         )
@@ -645,32 +354,16 @@ async def mostrar_lista_contas(
     botoes.append(
         [
             InlineKeyboardButton(
-                "ðŸ”½ Filtrar",
-                callback_data="filtro_menu",
-            )
-        ]
-    )
-    botoes.append(
-        [
-            InlineKeyboardButton(
-                "ðŸ  Menu",
+                "🏠 Menu",
                 callback_data="menu",
             )
         ]
     )
 
-    texto = "ðŸ“‹ *LISTAR CONTAS*\n\n"
-
-    if filtros_ativos:
-        texto += f"Filtro(s): {filtros_ativos}\n\n"
-
-    texto += (
-        f"PÃ¡gina {pagina}/{total_paginas} â€” "
-        f"{len(contas)} conta(s) no total:"
-    )
-
     await query.edit_message_text(
-        texto,
+        "📋 *LISTAR CONTAS*\n\n"
+        f"Página {pagina}/{total_paginas} — "
+        f"{len(contas)} conta(s) no total:",
         reply_markup=InlineKeyboardMarkup(
             botoes
         ),
@@ -690,7 +383,7 @@ async def mostrar_detalhes_conta(
 
     if not conta:
         await query.answer(
-            "âŒ Conta nÃ£o encontrada.",
+            "❌ Conta não encontrada.",
             show_alert=True,
         )
         return
@@ -708,89 +401,61 @@ async def mostrar_detalhes_conta(
         status,
         ultima_verificacao,
         criado_em,
-        tags,
     ) = conta
 
     emoji_status = (
-        "âœ… Ativa" if status == "ativa" else "âš« Inativa"
+        "✅ Ativa" if status == "ativa" else "⚫ Inativa"
     )
-
-    ultimo_resultado = obter_ultima_verificacao_resultado(
-        conta_id
-    )
-
-    linha_resultado = ""
-    if ultimo_resultado:
-        resultado_valor, _ = ultimo_resultado
-        emoji_resultado = (
-            "âœ… OK" if resultado_valor == "ok" else "âš ï¸ Problema"
-        )
-        linha_resultado = f" ({emoji_resultado})"
-
-    senha_oculta = "â€¢" * 10 if senha else "â€”"
 
     texto = (
-        f"ðŸ“¦ *{servico}*\n"
-        "â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”\n"
-        f"ðŸ“§ Email: {email or 'â€”'}\n"
-        f"ðŸ”‘ Senha: `{senha_oculta}`\n"
-        f"ðŸ—“ï¸ Criada em: {data_criacao or 'â€”'}\n"
-        f"ðŸ’° Custo: "
-        f"{f'R$ {custo_criacao:.2f}' if custo_criacao else 'â€”'}\n"
-        f"ðŸ·ï¸ Fornecedor: {fornecedor or 'â€”'}\n"
-        f"ðŸ–¥ï¸ Telas/perfis: {telas_perfis or 'â€”'}\n"
-        f"ðŸ“ Obs: {observacoes or 'â€”'}\n"
-        f"ðŸ·ï¸ Tags: {tags or 'â€”'}\n"
-        f"ðŸ“Š Status: {emoji_status}\n"
-        f"ðŸ”Ž Ãšltima verificaÃ§Ã£o: "
-        f"{str(ultima_verificacao)[:16]}{linha_resultado}\n"
-        "â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”"
+        f"📦 *{servico}*\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        f"📧 Email: {email or '—'}\n"
+        f"🔑 Senha: `{senha or '—'}`\n"
+        f"🗓️ Criada em: {data_criacao or '—'}\n"
+        f"💰 Custo: "
+        f"{f'R$ {custo_criacao:.2f}' if custo_criacao else '—'}\n"
+        f"🏷️ Fornecedor: {fornecedor or '—'}\n"
+        f"🖥️ Telas/perfis: {telas_perfis or '—'}\n"
+        f"📝 Obs: {observacoes or '—'}\n"
+        f"📊 Status: {emoji_status}\n"
+        f"🔎 Última verificação: "
+        f"{str(ultima_verificacao)[:16]}\n"
+        "━━━━━━━━━━━━━━━━━━"
     )
 
     botoes = [
         [
             InlineKeyboardButton(
-                "ðŸ‘ï¸ MOSTRAR SENHA",
-                callback_data=f"senha_{conta_id}",
+                "✅ MARCAR COMO VERIFICADA",
+                callback_data=f"verificar_{conta_id}",
             )
         ],
         [
             InlineKeyboardButton(
-                "âœ… MARCAR COMO VERIFICADA",
-                callback_data=f"verificarmenu_{conta_id}",
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                "ðŸ“œ HISTÃ“RICO DE VERIFICAÃ‡Ã•ES",
-                callback_data=f"historico_{conta_id}",
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                "âœï¸ EDITAR",
+                "✏️ EDITAR",
                 callback_data=f"editar_{conta_id}",
             )
         ],
         [
             InlineKeyboardButton(
                 (
-                    "âš« MARCAR INATIVA"
+                    "⚫ MARCAR INATIVA"
                     if status == "ativa"
-                    else "âœ… MARCAR ATIVA"
+                    else "✅ MARCAR ATIVA"
                 ),
                 callback_data=f"toggle_status_{conta_id}",
             )
         ],
         [
             InlineKeyboardButton(
-                "ðŸ—‘ï¸ EXCLUIR",
+                "🗑️ EXCLUIR",
                 callback_data=f"excluir_{conta_id}",
             )
         ],
         [
             InlineKeyboardButton(
-                "ðŸ  Menu",
+                "🏠 Menu",
                 callback_data="menu",
             )
         ],
@@ -806,62 +471,20 @@ async def mostrar_detalhes_conta(
 
 
 # =========================================================
-# HISTÃ“RICO DE VERIFICAÃ‡Ã•ES
-# =========================================================
-
-async def mostrar_historico_conta(
-    query,
-    conta_id,
-):
-    conta = buscar_conta(conta_id)
-
-    if not conta:
-        await query.answer(
-            "âŒ Conta nÃ£o encontrada.",
-            show_alert=True,
-        )
-        return
-
-    historico = listar_historico_verificacoes(
-        conta_id,
-        10,
-    )
-
-    texto = f"ðŸ“œ *HISTÃ“RICO â€” {conta[1]}*\n\n"
-
-    if not historico:
-        texto += "Nenhuma verificaÃ§Ã£o registrada ainda."
-    else:
-        for resultado_valor, data_valor in historico:
-            emoji_resultado = (
-                "âœ… OK"
-                if resultado_valor == "ok"
-                else "âš ï¸ Problema"
-            )
-            texto += (
-                f"{emoji_resultado} â€” "
-                f"{str(data_valor)[:16]}\n"
-            )
-
-    await query.edit_message_text(
-        texto,
-        reply_markup=InlineKeyboardMarkup(
-            [
-                [
-                    InlineKeyboardButton(
-                        "â¬…ï¸ Voltar",
-                        callback_data=f"conta_{conta_id}",
-                    )
-                ]
-            ]
-        ),
-        parse_mode="Markdown",
-    )
-
-
-# =========================================================
 # EDITAR CAMPO
 # =========================================================
+
+NOMES_CAMPOS = {
+    "servico": "Serviço",
+    "email": "Email/login",
+    "senha": "Senha",
+    "data_criacao": "Data de criação",
+    "custo_criacao": "Custo de criação",
+    "fornecedor": "Fornecedor",
+    "telas_perfis": "Telas/perfis",
+    "observacoes": "Observações",
+}
+
 
 async def mostrar_menu_editar(
     query,
@@ -873,7 +496,7 @@ async def mostrar_menu_editar(
         botoes.append(
             [
                 InlineKeyboardButton(
-                    f"âœï¸ {nome}",
+                    f"✏️ {nome}",
                     callback_data=(
                         f"editarcampo_{conta_id}_{campo}"
                     ),
@@ -884,15 +507,15 @@ async def mostrar_menu_editar(
     botoes.append(
         [
             InlineKeyboardButton(
-                "â¬…ï¸ Voltar",
+                "⬅️ Voltar",
                 callback_data=f"conta_{conta_id}",
             )
         ]
     )
 
     await query.edit_message_text(
-        "âœï¸ *EDITAR CONTA*\n\n"
-        "Qual campo vocÃª quer alterar?",
+        "✏️ *EDITAR CONTA*\n\n"
+        "Qual campo você quer alterar?",
         reply_markup=InlineKeyboardMarkup(
             botoes
         ),
@@ -913,13 +536,13 @@ async def iniciar_edicao_campo(
     nome_campo = NOMES_CAMPOS.get(campo, campo)
 
     await query.edit_message_text(
-        f"âœï¸ *EDITAR {nome_campo.upper()}*\n\n"
+        f"✏️ *EDITAR {nome_campo.upper()}*\n\n"
         "Digite o novo valor:",
         reply_markup=InlineKeyboardMarkup(
             [
                 [
                     InlineKeyboardButton(
-                        "âŒ Cancelar",
+                        "❌ Cancelar",
                         callback_data=f"conta_{conta_id}",
                     )
                 ]
@@ -949,7 +572,7 @@ async def processar_edicao_campo(
             valor = float(texto.replace(",", "."))
         except ValueError:
             await update.message.reply_text(
-                "âŒ Digite um nÃºmero vÃ¡lido "
+                "❌ Digite um número válido "
                 "(ex: 15.00)."
             )
             return True
@@ -965,12 +588,12 @@ async def processar_edicao_campo(
     context.user_data.clear()
 
     await update.message.reply_text(
-        "âœ… Campo atualizado!",
+        "✅ Campo atualizado!",
         reply_markup=InlineKeyboardMarkup(
             [
                 [
                     InlineKeyboardButton(
-                        "ðŸ“¦ Ver conta",
+                        "📦 Ver conta",
                         callback_data=f"conta_{conta_id}",
                     )
                 ]
@@ -993,14 +616,14 @@ async def iniciar_busca(
     context.user_data["aguardando_busca"] = True
 
     await query.edit_message_text(
-        "ðŸ” *BUSCAR CONTA*\n\n"
-        "Digite o serviÃ§o, email, fornecedor ou tag "
-        "que vocÃª estÃ¡ procurando.",
+        "🔍 *BUSCAR CONTA*\n\n"
+        "Digite o serviço, email ou fornecedor "
+        "que você está procurando.",
         reply_markup=InlineKeyboardMarkup(
             [
                 [
                     InlineKeyboardButton(
-                        "âŒ Cancelar",
+                        "❌ Cancelar",
                         callback_data="menu",
                     )
                 ]
@@ -1028,12 +651,12 @@ async def processar_busca(
 
     if not resultados:
         await update.message.reply_text(
-            f"âŒ Nenhum resultado para \"{termo}\".",
+            f"❌ Nenhum resultado para \"{termo}\".",
             reply_markup=InlineKeyboardMarkup(
                 [
                     [
                         InlineKeyboardButton(
-                            "ðŸ  Menu",
+                            "🏠 Menu",
                             callback_data="menu",
                         )
                     ]
@@ -1049,7 +672,7 @@ async def processar_busca(
         conta_id, servico, email, status = conta
 
         emoji_status = (
-            "âœ…" if status == "ativa" else "âš«"
+            "✅" if status == "ativa" else "⚫"
         )
 
         rotulo = f"{emoji_status} {servico}"
@@ -1069,14 +692,14 @@ async def processar_busca(
     botoes.append(
         [
             InlineKeyboardButton(
-                "ðŸ  Menu",
+                "🏠 Menu",
                 callback_data="menu",
             )
         ]
     )
 
     await update.message.reply_text(
-        f"ðŸ” *RESULTADOS PARA* \"{termo}\":",
+        f"🔍 *RESULTADOS PARA* \"{termo}\":",
         reply_markup=InlineKeyboardMarkup(
             botoes
         ),
@@ -1087,179 +710,7 @@ async def processar_busca(
 
 
 # =========================================================
-# RESUMO DE CUSTOS
-# =========================================================
-
-async def mostrar_resumo_custos(
-    query,
-    context,
-):
-    resumo = resumo_custos()
-
-    texto = (
-        "ðŸ’° *RESUMO DE CUSTOS*\n"
-        "â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”\n"
-        f"ðŸ“¦ Total de contas: {resumo['total_contas']}\n"
-        f"ðŸ’µ Com custo informado: "
-        f"{resumo['contas_com_custo']}\n\n"
-        f"ðŸ’° Total investido: "
-        f"R$ {resumo['total_gasto']:.2f}\n"
-        f"âœ… Em contas ativas: "
-        f"R$ {resumo['gasto_ativas']:.2f}\n"
-        f"âš« Em contas inativas: "
-        f"R$ {resumo['gasto_inativas']:.2f}\n"
-        "â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”"
-    )
-
-    await query.edit_message_text(
-        texto,
-        reply_markup=InlineKeyboardMarkup(
-            [
-                [
-                    InlineKeyboardButton(
-                        "ðŸ  Menu",
-                        callback_data="menu",
-                    )
-                ]
-            ]
-        ),
-        parse_mode="Markdown",
-    )
-
-
-# =========================================================
-# VERIFICAÃ‡ÃƒO EM LOTE
-# =========================================================
-
-async def mostrar_lote_verificacao(
-    query,
-    context,
-    pagina=1,
-):
-    contas = listar_contas(apenas_ativas=True)
-
-    selecionados = context.user_data.setdefault(
-        "lote_selecionados",
-        set(),
-    )
-
-    if not contas:
-        await query.edit_message_text(
-            "â˜‘ï¸ *VERIFICAÃ‡ÃƒO EM LOTE*\n\n"
-            "Nenhuma conta ativa cadastrada.",
-            reply_markup=InlineKeyboardMarkup(
-                [
-                    [
-                        InlineKeyboardButton(
-                            "ðŸ  Menu",
-                            callback_data="menu",
-                        )
-                    ]
-                ]
-            ),
-            parse_mode="Markdown",
-        )
-        return
-
-    total_paginas = (
-        len(contas) + CONTAS_POR_PAGINA - 1
-    ) // CONTAS_POR_PAGINA
-
-    pagina = max(1, min(pagina, total_paginas))
-
-    inicio = (pagina - 1) * CONTAS_POR_PAGINA
-    fim = inicio + CONTAS_POR_PAGINA
-
-    botoes = []
-
-    for conta in contas[inicio:fim]:
-
-        conta_id, servico, email, status = conta
-
-        marcado = "â˜‘ï¸" if conta_id in selecionados else "â¬œ"
-
-        rotulo = f"{marcado} {servico}"
-
-        if email:
-            rotulo += f" ({email[:15]})"
-
-        botoes.append(
-            [
-                InlineKeyboardButton(
-                    rotulo[:60],
-                    callback_data=(
-                        f"loteToggle_{conta_id}_{pagina}"
-                    ),
-                )
-            ]
-        )
-
-    navegacao = []
-
-    if pagina > 1:
-        navegacao.append(
-            InlineKeyboardButton(
-                "â¬…ï¸",
-                callback_data=f"lotepag_{pagina - 1}",
-            )
-        )
-
-    if pagina < total_paginas:
-        navegacao.append(
-            InlineKeyboardButton(
-                "âž¡ï¸",
-                callback_data=f"lotepag_{pagina + 1}",
-            )
-        )
-
-    if navegacao:
-        botoes.append(navegacao)
-
-    if selecionados:
-        botoes.append(
-            [
-                InlineKeyboardButton(
-                    f"âœ… Marcar {len(selecionados)} como OK",
-                    callback_data="loteconfirmar_ok",
-                )
-            ]
-        )
-        botoes.append(
-            [
-                InlineKeyboardButton(
-                    f"âš ï¸ Marcar {len(selecionados)} c/ problema",
-                    callback_data="loteconfirmar_problema",
-                )
-            ]
-        )
-
-    botoes.append(
-        [
-            InlineKeyboardButton(
-                "ðŸ  Menu",
-                callback_data="menu",
-            )
-        ]
-    )
-
-    texto = (
-        "â˜‘ï¸ *VERIFICAÃ‡ÃƒO EM LOTE*\n\n"
-        f"PÃ¡gina {pagina}/{total_paginas} â€” toque pra "
-        "selecionar as contas que vocÃª jÃ¡ checou.\n"
-        f"Selecionadas: {len(selecionados)}"
-    )
-
-    await query.edit_message_text(
-        texto,
-        reply_markup=InlineKeyboardMarkup(
-            botoes
-        ),
-        parse_mode="Markdown",
-    )
-
-
-# =========================================================
-# CONFIGURAR INTERVALO DE VERIFICAÃ‡ÃƒO
+# CONFIGURAR INTERVALO DE VERIFICAÇÃO
 # =========================================================
 
 async def iniciar_config_intervalo(
@@ -1275,10 +726,10 @@ async def iniciar_config_intervalo(
     )
 
     await query.edit_message_text(
-        "âš™ï¸ *INTERVALO DE VERIFICAÃ‡ÃƒO*\n\n"
-        f"ðŸ“‹ Valor atual: {atual} dias\n\n"
+        "⚙️ *INTERVALO DE VERIFICAÇÃO*\n\n"
+        f"📋 Valor atual: {atual} dias\n\n"
         "Digite de quantos em quantos dias "
-        "vocÃª quer ser lembrado de verificar "
+        "você quer ser lembrado de verificar "
         "cada conta.\n\n"
         "Exemplo:\n"
         "`30`\n"
@@ -1287,7 +738,7 @@ async def iniciar_config_intervalo(
             [
                 [
                     InlineKeyboardButton(
-                        "âŒ Cancelar",
+                        "❌ Cancelar",
                         callback_data="menu",
                     )
                 ]
@@ -1311,7 +762,7 @@ async def processar_config_intervalo(
 
     if not texto.isdigit() or int(texto) <= 0:
         await update.message.reply_text(
-            "âŒ Digite um nÃºmero inteiro maior "
+            "❌ Digite um número inteiro maior "
             "que zero."
         )
         return True
@@ -1324,13 +775,13 @@ async def processar_config_intervalo(
     context.user_data.clear()
 
     await update.message.reply_text(
-        "âœ… *INTERVALO ATUALIZADO!*\n\n"
-        f"âš™ï¸ Novo valor: {texto} dias",
+        "✅ *INTERVALO ATUALIZADO!*\n\n"
+        f"⚙️ Novo valor: {texto} dias",
         reply_markup=InlineKeyboardMarkup(
             [
                 [
                     InlineKeyboardButton(
-                        "ðŸ  Menu",
+                        "🏠 Menu",
                         callback_data="menu",
                     )
                 ]
@@ -1343,7 +794,7 @@ async def processar_config_intervalo(
 
 
 # =========================================================
-# VERIFICADOR AUTOMÃTICO (LOOP EM BACKGROUND)
+# VERIFICADOR AUTOMÁTICO (LOOP EM BACKGROUND)
 # =========================================================
 
 async def checar_contas_pendentes(
@@ -1363,12 +814,9 @@ async def checar_contas_pendentes(
             return
 
         texto = (
-            "ðŸ”” *CONTAS PRA VERIFICAR*\n\n"
-            f"As contas abaixo nÃ£o sÃ£o checadas "
-            f"hÃ¡ {intervalo}+ dias:\n\n"
-            "Toque em âœ… OK ou âš ï¸ Problema pra "
-            "cada uma, ou use â˜‘ï¸ VERIFICAÃ‡ÃƒO EM "
-            "LOTE no menu pra marcar vÃ¡rias juntas."
+            "🔔 *CONTAS PRA VERIFICAR*\n\n"
+            f"As contas abaixo não são checadas "
+            f"há {intervalo}+ dias:\n\n"
         )
 
         botoes = []
@@ -1377,18 +825,21 @@ async def checar_contas_pendentes(
 
             conta_id, servico, email, _ = conta
 
+            rotulo = f"{servico}"
+
+            if email:
+                rotulo += f" ({email[:20]})"
+
+            texto += f"📦 {rotulo}\n"
+
             botoes.append(
                 [
                     InlineKeyboardButton(
-                        f"âœ… OK: {servico[:18]}",
-                        callback_data=f"verificarok_{conta_id}",
-                    ),
-                    InlineKeyboardButton(
-                        f"âš ï¸ Problema",
+                        f"✅ Verificada: {servico[:25]}",
                         callback_data=(
-                            f"verificarproblema_{conta_id}"
+                            f"verificar_{conta_id}"
                         ),
-                    ),
+                    )
                 ]
             )
 
@@ -1412,7 +863,7 @@ async def loop_verificador(
     application: Application,
 ):
     print(
-        "ðŸ”” Verificador de contas iniciado."
+        "🔔 Verificador de contas iniciado."
     )
 
     while True:
@@ -1423,7 +874,7 @@ async def loop_verificador(
 
         except asyncio.CancelledError:
             print(
-                "ðŸ”” Verificador de contas encerrado."
+                "🔔 Verificador de contas encerrado."
             )
             raise
 
@@ -1533,7 +984,7 @@ async def processar_mensagem_texto(
 
 
 # =========================================================
-# BOTÃ•ES (ROTEADOR)
+# BOTÕES (ROTEADOR)
 # =========================================================
 
 async def botoes(
@@ -1547,7 +998,7 @@ async def botoes(
 
     if not is_admin(query.from_user.id):
         await query.answer(
-            "âŒ Acesso negado.",
+            "❌ Acesso negado.",
             show_alert=True,
         )
         return
@@ -1560,14 +1011,12 @@ async def botoes(
         context.user_data.clear()
 
         total, ativas = contar_contas()
-        total_gasto = resumo_custos()["total_gasto"]
 
         await query.edit_message_text(
-            "ðŸ—‚ï¸ *GERENCIADOR DE CONTAS*\n\n"
-            f"ðŸ“¦ Total cadastradas: {total}\n"
-            f"âœ… Ativas: {ativas}\n"
-            f"ðŸ’° Investido: R$ {total_gasto:.2f}\n\n"
-            "Escolha uma opÃ§Ã£o:",
+            "🗂️ *GERENCIADOR DE CONTAS*\n\n"
+            f"📦 Total cadastradas: {total}\n"
+            f"✅ Ativas: {ativas}\n\n"
+            "Escolha uma opção:",
             reply_markup=menu_principal(),
             parse_mode="Markdown",
         )
@@ -1584,12 +1033,12 @@ async def botoes(
         context.user_data.clear()
 
         await query.edit_message_text(
-            "âŒ Cadastro cancelado.",
+            "❌ Cadastro cancelado.",
             reply_markup=InlineKeyboardMarkup(
                 [
                     [
                         InlineKeyboardButton(
-                            "ðŸ  Menu",
+                            "🏠 Menu",
                             callback_data="menu",
                         )
                     ]
@@ -1608,84 +1057,7 @@ async def botoes(
 
         await mostrar_lista_contas(
             query,
-            context,
             pagina,
-        )
-        return
-
-    if acao == "filtro_menu":
-        await mostrar_filtro_menu(
-            query,
-            context,
-        )
-        return
-
-    if acao == "filtroservico":
-        await mostrar_filtro_servico(
-            query,
-            context,
-        )
-        return
-
-    if acao == "filtrostatus":
-        await mostrar_filtro_status(
-            query,
-            context,
-        )
-        return
-
-    if acao == "filtrotag":
-        await mostrar_filtro_tag(
-            query,
-            context,
-        )
-        return
-
-    if acao == "filtrolimpar":
-        context.user_data.pop("filtro_servico", None)
-        context.user_data.pop("filtro_status", None)
-        context.user_data.pop("filtro_tag", None)
-
-        await mostrar_lista_contas(
-            query,
-            context,
-            1,
-        )
-        return
-
-    if acao.startswith("setfiltroservico_"):
-        context.user_data["filtro_servico"] = (
-            acao.replace("setfiltroservico_", "", 1)
-        )
-
-        await mostrar_lista_contas(
-            query,
-            context,
-            1,
-        )
-        return
-
-    if acao.startswith("setfiltrostatus_"):
-        context.user_data["filtro_status"] = (
-            acao.replace("setfiltrostatus_", "", 1)
-        )
-
-        await mostrar_lista_contas(
-            query,
-            context,
-            1,
-        )
-        return
-
-    if acao.startswith("setfiltrotag_"):
-        context.user_data["filtro_tag"] = (
-            acao.replace("setfiltrotag_", "", 1)
-        )
-
-        await mostrar_lista_contas(
-            query,
-            context,
-            1,
         )
         return
 
@@ -1696,7 +1068,7 @@ async def botoes(
             )
         except ValueError:
             await query.answer(
-                "âŒ Conta invÃ¡lida.",
+                "❌ Conta inválida.",
                 show_alert=True,
             )
             return
@@ -1707,135 +1079,23 @@ async def botoes(
         )
         return
 
-    if acao.startswith("senha_"):
+    if acao.startswith("verificar_"):
         try:
             conta_id = int(
-                acao.replace("senha_", "", 1)
+                acao.replace("verificar_", "", 1)
             )
         except ValueError:
             await query.answer(
-                "âŒ Conta invÃ¡lida.",
+                "❌ Conta inválida.",
                 show_alert=True,
             )
             return
 
-        conta = buscar_conta(conta_id)
-
-        if not conta:
-            await query.answer(
-                "âŒ Conta nÃ£o encontrada.",
-                show_alert=True,
-            )
-            return
-
-        senha = conta[3]
+        marcar_conta_verificada(conta_id)
 
         await query.answer(
-            f"ðŸ”‘ Senha: {senha or 'â€” (nÃ£o cadastrada)'}",
+            "✅ Marcada como verificada!",
             show_alert=True,
-        )
-        return
-
-    if acao.startswith("verificarmenu_"):
-        try:
-            conta_id = int(
-                acao.replace("verificarmenu_", "", 1)
-            )
-        except ValueError:
-            await query.answer(
-                "âŒ Conta invÃ¡lida.",
-                show_alert=True,
-            )
-            return
-
-        await query.edit_message_text(
-            "âœ… *MARCAR COMO VERIFICADA*\n\n"
-            "Como estÃ¡ a conta?",
-            reply_markup=InlineKeyboardMarkup(
-                [
-                    [
-                        InlineKeyboardButton(
-                            "âœ… OK, tudo certo",
-                            callback_data=(
-                                f"verificarok_{conta_id}"
-                            ),
-                        )
-                    ],
-                    [
-                        InlineKeyboardButton(
-                            "âš ï¸ Com problema",
-                            callback_data=(
-                                f"verificarproblema_{conta_id}"
-                            ),
-                        )
-                    ],
-                    [
-                        InlineKeyboardButton(
-                            "âŒ Cancelar",
-                            callback_data=f"conta_{conta_id}",
-                        )
-                    ],
-                ]
-            ),
-            parse_mode="Markdown",
-        )
-        return
-
-    if acao.startswith("verificarok_") or acao.startswith(
-        "verificarproblema_"
-    ):
-        resultado = (
-            "ok" if acao.startswith("verificarok_") else "problema"
-        )
-        prefixo = (
-            "verificarok_"
-            if resultado == "ok"
-            else "verificarproblema_"
-        )
-
-        try:
-            conta_id = int(
-                acao.replace(prefixo, "", 1)
-            )
-        except ValueError:
-            await query.answer(
-                "âŒ Conta invÃ¡lida.",
-                show_alert=True,
-            )
-            return
-
-        marcar_conta_verificada(conta_id, resultado)
-
-        emoji_resultado = (
-            "âœ… OK" if resultado == "ok" else "âš ï¸ Com problema"
-        )
-
-        await query.answer(
-            f"Marcada como verificada! {emoji_resultado}",
-            show_alert=True,
-        )
-
-        await mostrar_detalhes_conta(
-            query,
-            conta_id,
-        )
-        return
-
-    if acao.startswith("historico_"):
-        try:
-            conta_id = int(
-                acao.replace("historico_", "", 1)
-            )
-        except ValueError:
-            await query.answer(
-                "âŒ Conta invÃ¡lida.",
-                show_alert=True,
-            )
-            return
-
-        await mostrar_historico_conta(
-            query,
-            conta_id,
         )
         return
 
@@ -1848,7 +1108,7 @@ async def botoes(
             )
         except ValueError:
             await query.answer(
-                "âŒ Conta invÃ¡lida.",
+                "❌ Conta inválida.",
                 show_alert=True,
             )
             return
@@ -1857,7 +1117,7 @@ async def botoes(
 
         if not conta:
             await query.answer(
-                "âŒ Conta nÃ£o encontrada.",
+                "❌ Conta não encontrada.",
                 show_alert=True,
             )
             return
@@ -1888,7 +1148,7 @@ async def botoes(
             )
         except ValueError:
             await query.answer(
-                "âŒ Conta invÃ¡lida.",
+                "❌ Conta inválida.",
                 show_alert=True,
             )
             return
@@ -1909,7 +1169,7 @@ async def botoes(
             campo = partes[1]
         except (ValueError, IndexError):
             await query.answer(
-                "âŒ Dados invÃ¡lidos.",
+                "❌ Dados inválidos.",
                 show_alert=True,
             )
             return
@@ -1929,7 +1189,7 @@ async def botoes(
             )
         except ValueError:
             await query.answer(
-                "âŒ Conta invÃ¡lida.",
+                "❌ Conta inválida.",
                 show_alert=True,
             )
             return
@@ -1938,20 +1198,20 @@ async def botoes(
 
         if not conta:
             await query.answer(
-                "âŒ Conta nÃ£o encontrada.",
+                "❌ Conta não encontrada.",
                 show_alert=True,
             )
             return
 
         await query.edit_message_text(
-            "âš ï¸ *EXCLUIR CONTA?*\n\n"
-            f"ðŸ“¦ {conta[1]}\n\n"
-            "Essa aÃ§Ã£o nÃ£o pode ser desfeita.",
+            "⚠️ *EXCLUIR CONTA?*\n\n"
+            f"📦 {conta[1]}\n\n"
+            "Essa ação não pode ser desfeita.",
             reply_markup=InlineKeyboardMarkup(
                 [
                     [
                         InlineKeyboardButton(
-                            "ðŸ—‘ï¸ SIM, EXCLUIR",
+                            "🗑️ SIM, EXCLUIR",
                             callback_data=(
                                 f"confirmarexcluir_{conta_id}"
                             ),
@@ -1959,7 +1219,7 @@ async def botoes(
                     ],
                     [
                         InlineKeyboardButton(
-                            "âŒ Cancelar",
+                            "❌ Cancelar",
                             callback_data=f"conta_{conta_id}",
                         )
                     ],
@@ -1978,7 +1238,7 @@ async def botoes(
             )
         except ValueError:
             await query.answer(
-                "âŒ Conta invÃ¡lida.",
+                "❌ Conta inválida.",
                 show_alert=True,
             )
             return
@@ -1986,12 +1246,12 @@ async def botoes(
         excluir_conta(conta_id)
 
         await query.edit_message_text(
-            "âœ… Conta excluÃ­da.",
+            "✅ Conta excluída.",
             reply_markup=InlineKeyboardMarkup(
                 [
                     [
                         InlineKeyboardButton(
-                            "ðŸ  Menu",
+                            "🏠 Menu",
                             callback_data="menu",
                         )
                     ]
@@ -2007,116 +1267,6 @@ async def botoes(
         )
         return
 
-    if acao == "resumo_custos":
-        await mostrar_resumo_custos(
-            query,
-            context,
-        )
-        return
-
-    if acao == "lote_iniciar":
-        context.user_data["lote_selecionados"] = set()
-
-        await mostrar_lote_verificacao(
-            query,
-            context,
-            1,
-        )
-        return
-
-    if acao.startswith("lotepag_"):
-        try:
-            pagina = int(
-                acao.replace("lotepag_", "", 1)
-            )
-        except ValueError:
-            pagina = 1
-
-        await mostrar_lote_verificacao(
-            query,
-            context,
-            pagina,
-        )
-        return
-
-    if acao.startswith("loteToggle_"):
-        partes = acao.replace(
-            "loteToggle_", "", 1
-        ).split("_")
-
-        try:
-            conta_id = int(partes[0])
-            pagina_atual = (
-                int(partes[1]) if len(partes) > 1 else 1
-            )
-        except (ValueError, IndexError):
-            await query.answer(
-                "âŒ Dados invÃ¡lidos.",
-                show_alert=True,
-            )
-            return
-
-        selecionados = context.user_data.setdefault(
-            "lote_selecionados",
-            set(),
-        )
-
-        if conta_id in selecionados:
-            selecionados.discard(conta_id)
-        else:
-            selecionados.add(conta_id)
-
-        await mostrar_lote_verificacao(
-            query,
-            context,
-            pagina_atual,
-        )
-        return
-
-    if acao.startswith("loteconfirmar_"):
-        resultado = acao.replace(
-            "loteconfirmar_", "", 1
-        )
-
-        selecionados = context.user_data.get(
-            "lote_selecionados",
-            set(),
-        )
-
-        quantidade = marcar_varias_verificadas(
-            list(selecionados),
-            resultado,
-        )
-
-        context.user_data["lote_selecionados"] = set()
-
-        emoji_resultado = (
-            "âœ… OK" if resultado == "ok" else "âš ï¸ Com problema"
-        )
-
-        await query.edit_message_text(
-            f"âœ… *{quantidade} CONTA(S) VERIFICADA(S)!*\n\n"
-            f"Resultado: {emoji_resultado}",
-            reply_markup=InlineKeyboardMarkup(
-                [
-                    [
-                        InlineKeyboardButton(
-                            "â˜‘ï¸ Verificar mais",
-                            callback_data="lote_iniciar",
-                        )
-                    ],
-                    [
-                        InlineKeyboardButton(
-                            "ðŸ  Menu",
-                            callback_data="menu",
-                        )
-                    ],
-                ]
-            ),
-            parse_mode="Markdown",
-        )
-        return
-
     if acao == "config_intervalo":
         await iniciar_config_intervalo(
             query,
@@ -2125,7 +1275,7 @@ async def botoes(
         return
 
     await query.answer(
-        "âŒ OpÃ§Ã£o nÃ£o reconhecida.",
+        "❌ Opção não reconhecida.",
         show_alert=True,
     )
 
@@ -2138,9 +1288,13 @@ async def erro_global(
     update: object,
     context: ContextTypes.DEFAULT_TYPE,
 ):
-    print("âŒ ERRO GLOBAL:")
+    print("❌ ERRO GLOBAL:")
     print(repr(context.error))
 
+
+# =========================================================
+# MAIN
+# =========================================================
 
 # =========================================================
 # COMANDOS DE ATALHO (/nova, /listar, /buscar)
@@ -2162,13 +1316,13 @@ async def comando_nova(
     _, pergunta = CAMPOS_CADASTRO[0]
 
     await update.message.reply_text(
-        "âž• *NOVA CONTA*\n\n"
+        "➕ *NOVA CONTA*\n\n"
         f"{pergunta}",
         reply_markup=InlineKeyboardMarkup(
             [
                 [
                     InlineKeyboardButton(
-                        "âŒ CANCELAR",
+                        "❌ CANCELAR",
                         callback_data="cancelar_cadastro",
                     )
                 ]
@@ -2191,13 +1345,13 @@ async def comando_listar(
 
     if not contas:
         await update.message.reply_text(
-            "ðŸ“‹ *LISTAR CONTAS*\n\n"
+            "📋 *LISTAR CONTAS*\n\n"
             "Nenhuma conta cadastrada ainda.",
             reply_markup=InlineKeyboardMarkup(
                 [
                     [
                         InlineKeyboardButton(
-                            "âž• Nova conta",
+                            "➕ Nova conta",
                             callback_data="nova_conta",
                         )
                     ]
@@ -2214,7 +1368,7 @@ async def comando_listar(
         conta_id, servico, email, status = conta
 
         emoji_status = (
-            "âœ…" if status == "ativa" else "âš«"
+            "✅" if status == "ativa" else "⚫"
         )
 
         rotulo = f"{emoji_status} {servico}"
@@ -2235,14 +1389,14 @@ async def comando_listar(
         botoes.append(
             [
                 InlineKeyboardButton(
-                    "âž¡ï¸ Ver mais",
+                    "➡️ Ver mais",
                     callback_data="listar_2",
                 )
             ]
         )
 
     await update.message.reply_text(
-        "ðŸ“‹ *LISTAR CONTAS*\n\n"
+        "📋 *LISTAR CONTAS*\n\n"
         f"{len(contas)} conta(s) no total:",
         reply_markup=InlineKeyboardMarkup(
             botoes
@@ -2264,14 +1418,14 @@ async def comando_buscar(
     context.user_data["aguardando_busca"] = True
 
     await update.message.reply_text(
-        "ðŸ” *BUSCAR CONTA*\n\n"
-        "Digite o serviÃ§o, email, fornecedor ou tag "
-        "que vocÃª estÃ¡ procurando.",
+        "🔍 *BUSCAR CONTA*\n\n"
+        "Digite o serviço, email ou fornecedor "
+        "que você está procurando.",
         reply_markup=InlineKeyboardMarkup(
             [
                 [
                     InlineKeyboardButton(
-                        "âŒ Cancelar",
+                        "❌ Cancelar",
                         callback_data="menu",
                     )
                 ]
@@ -2338,7 +1492,7 @@ def main():
         erro_global
     )
 
-    print("ðŸ—‚ï¸ Gerenciador de Contas iniciado!")
+    print("🗂️ Gerenciador de Contas iniciado!")
 
     application.run_polling(
         drop_pending_updates=True
