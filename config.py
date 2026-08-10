@@ -2,7 +2,7 @@ import os
 
 
 # =========================================================
-# CONFIGURAÇÕES (via variáveis de ambiente no Railway)
+# CONFIGURAÃ‡Ã•ES (via variÃ¡veis de ambiente no Railway)
 # =========================================================
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
@@ -17,15 +17,15 @@ def verificar_configuracao():
 
     if not BOT_TOKEN:
         raise RuntimeError(
-            "BOT_TOKEN não configurado. "
-            "Defina a variável de ambiente BOT_TOKEN."
+            "BOT_TOKEN nÃ£o configurado. "
+            "Defina a variÃ¡vel de ambiente BOT_TOKEN."
         )
 
     if not ADMIN_ID:
         raise RuntimeError(
-            "ADMIN_ID não configurado. "
-            "Defina a variável de ambiente ADMIN_ID "
-            "com o seu ID numérico do Telegram."
+            "ADMIN_ID nÃ£o configurado. "
+            "Defina a variÃ¡vel de ambiente ADMIN_ID "
+            "com o seu ID numÃ©rico do Telegram."
         )
 
-    print("✅ Configuração validada.")
+    print("âœ… ConfiguraÃ§Ã£o validada.")
