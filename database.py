@@ -4,7 +4,7 @@ from config import DATABASE_NAME
 
 
 # =========================================================
-# CONEXÃƒO
+# CONEXÃO
 # =========================================================
 
 def conectar():
@@ -35,22 +35,9 @@ def criar_tabelas():
             ultima_verificacao TIMESTAMP
                 DEFAULT CURRENT_TIMESTAMP,
             criado_em TIMESTAMP
-                DEFAULT CURRENT_TIMESTAMP,
-            tags TEXT DEFAULT ''
+                DEFAULT CURRENT_TIMESTAMP
         )
     """)
-
-    # MigraÃ§Ã£o: bancos criados antes da versÃ£o com tags
-    # nÃ£o tÃªm essa coluna â€” adiciona se faltar.
-    cursor.execute("PRAGMA table_info(contas)")
-    colunas_existentes = {
-        linha[1] for linha in cursor.fetchall()
-    }
-
-    if "tags" not in colunas_existentes:
-        cursor.execute(
-            "ALTER TABLE contas ADD COLUMN tags TEXT DEFAULT ''"
-        )
 
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS configuracoes (
@@ -59,22 +46,12 @@ def criar_tabelas():
         )
     """)
 
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS historico_verificacoes (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            conta_id INTEGER NOT NULL,
-            resultado TEXT NOT NULL,
-            data TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (conta_id) REFERENCES contas(id)
-        )
-    """)
-
     conn.commit()
     conn.close()
 
 
 # =========================================================
-# CONFIGURAÃ‡Ã•ES (CHAVE / VALOR)
+# CONFIGURAÇÕES (CHAVE / VALOR)
 # =========================================================
 
 def definir_configuracao(
@@ -142,7 +119,6 @@ def cadastrar_conta(
     fornecedor,
     telas_perfis,
     observacoes,
-    tags=None,
 ):
 
     conn = conectar()
@@ -158,10 +134,9 @@ def cadastrar_conta(
             custo_criacao,
             fornecedor,
             telas_perfis,
-            observacoes,
-            tags
+            observacoes
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         servico,
         email,
@@ -171,7 +146,6 @@ def cadastrar_conta(
         fornecedor,
         telas_perfis,
         observacoes,
-        tags or "",
     ))
 
     conta_id = cursor.lastrowid
@@ -184,103 +158,41 @@ def cadastrar_conta(
 
 def listar_contas(
     apenas_ativas=False,
-    servico=None,
-    status=None,
-    tag=None,
 ):
-    """
-    Lista contas (id, servico, email, status), com
-    filtros opcionais por serviÃ§o, status e/ou tag.
-    `apenas_ativas` tem prioridade sobre `status` por
-    compatibilidade com chamadas antigas.
-    """
 
     conn = conectar()
     cursor = conn.cursor()
 
-    condicoes = []
-    parametros = []
-
     if apenas_ativas:
-        condicoes.append("status = 'ativa'")
-    elif status:
-        condicoes.append("status = ?")
-        parametros.append(status)
 
-    if servico:
-        condicoes.append("servico = ?")
-        parametros.append(servico)
+        cursor.execute("""
+            SELECT
+                id,
+                servico,
+                email,
+                status
+            FROM contas
+            WHERE status = 'ativa'
+            ORDER BY servico, id
+        """)
 
-    if tag:
-        condicoes.append("tags LIKE ? COLLATE NOCASE")
-        parametros.append(f"%{tag}%")
+    else:
 
-    where = ""
-    if condicoes:
-        where = "WHERE " + " AND ".join(condicoes)
-
-    cursor.execute(f"""
-        SELECT
-            id,
-            servico,
-            email,
-            status
-        FROM contas
-        {where}
-        ORDER BY servico, id
-    """, parametros)
+        cursor.execute("""
+            SELECT
+                id,
+                servico,
+                email,
+                status
+            FROM contas
+            ORDER BY servico, id
+        """)
 
     resultados = cursor.fetchall()
 
     conn.close()
 
     return resultados
-
-
-def listar_servicos_distintos():
-
-    conn = conectar()
-    cursor = conn.cursor()
-
-    cursor.execute("""
-        SELECT DISTINCT servico
-        FROM contas
-        ORDER BY servico
-    """)
-
-    resultados = [
-        linha[0] for linha in cursor.fetchall()
-    ]
-
-    conn.close()
-
-    return resultados
-
-
-def listar_tags_distintas():
-
-    conn = conectar()
-    cursor = conn.cursor()
-
-    cursor.execute("""
-        SELECT tags
-        FROM contas
-        WHERE tags IS NOT NULL AND tags != ''
-    """)
-
-    linhas = cursor.fetchall()
-
-    conn.close()
-
-    tags = set()
-
-    for (valor,) in linhas:
-        for parte in valor.split(","):
-            parte = parte.strip()
-            if parte:
-                tags.add(parte)
-
-    return sorted(tags)
 
 
 def buscar_conta(
@@ -303,8 +215,7 @@ def buscar_conta(
             observacoes,
             status,
             ultima_verificacao,
-            criado_em,
-            tags
+            criado_em
         FROM contas
         WHERE id = ?
     """, (
@@ -337,10 +248,8 @@ def buscar_contas_por_termo(
         WHERE servico LIKE ? COLLATE NOCASE
         OR email LIKE ? COLLATE NOCASE
         OR fornecedor LIKE ? COLLATE NOCASE
-        OR tags LIKE ? COLLATE NOCASE
         ORDER BY servico, id
     """, (
-        termo_like,
         termo_like,
         termo_like,
         termo_like,
@@ -366,7 +275,6 @@ CAMPOS_EDITAVEIS = {
     "fornecedor": "fornecedor",
     "telas_perfis": "telas_perfis",
     "observacoes": "observacoes",
-    "tags": "tags",
 }
 
 
@@ -378,7 +286,7 @@ def atualizar_campo_conta(
 
     if campo not in CAMPOS_EDITAVEIS:
         raise ValueError(
-            f"Campo invÃ¡lido: {campo}"
+            f"Campo inválido: {campo}"
         )
 
     coluna = CAMPOS_EDITAVEIS[campo]
@@ -433,12 +341,7 @@ def definir_status_conta(
 
 def marcar_conta_verificada(
     conta_id,
-    resultado="ok",
 ):
-    """
-    Marca a conta como verificada agora e registra o
-    resultado ("ok" ou "problema") no histÃ³rico.
-    """
 
     conn = conectar()
     cursor = conn.cursor()
@@ -453,115 +356,10 @@ def marcar_conta_verificada(
 
     alterado = cursor.rowcount > 0
 
-    cursor.execute("""
-        INSERT INTO historico_verificacoes
-        (conta_id, resultado)
-        VALUES (?, ?)
-    """, (
-        conta_id,
-        resultado,
-    ))
-
     conn.commit()
     conn.close()
 
     return alterado
-
-
-def marcar_varias_verificadas(
-    conta_ids,
-    resultado="ok",
-):
-    """
-    Marca vÃ¡rias contas como verificadas de uma vez,
-    todas com o mesmo resultado. Retorna quantas foram
-    de fato atualizadas.
-    """
-
-    if not conta_ids:
-        return 0
-
-    conn = conectar()
-    cursor = conn.cursor()
-
-    marcadas = 0
-
-    for conta_id in conta_ids:
-
-        cursor.execute("""
-            UPDATE contas
-            SET ultima_verificacao = CURRENT_TIMESTAMP
-            WHERE id = ?
-        """, (
-            conta_id,
-        ))
-
-        if cursor.rowcount > 0:
-            marcadas += 1
-
-        cursor.execute("""
-            INSERT INTO historico_verificacoes
-            (conta_id, resultado)
-            VALUES (?, ?)
-        """, (
-            conta_id,
-            resultado,
-        ))
-
-    conn.commit()
-    conn.close()
-
-    return marcadas
-
-
-def obter_ultima_verificacao_resultado(
-    conta_id,
-):
-
-    conn = conectar()
-    cursor = conn.cursor()
-
-    cursor.execute("""
-        SELECT resultado, data
-        FROM historico_verificacoes
-        WHERE conta_id = ?
-        ORDER BY data DESC
-        LIMIT 1
-    """, (
-        conta_id,
-    ))
-
-    resultado = cursor.fetchone()
-
-    conn.close()
-
-    return resultado
-
-
-def listar_historico_verificacoes(
-    conta_id,
-    limite=10,
-):
-
-    conn = conectar()
-    cursor = conn.cursor()
-
-    cursor.execute("""
-        SELECT resultado, data
-        FROM historico_verificacoes
-        WHERE conta_id = ?
-        ORDER BY data DESC
-        LIMIT ?
-    """, (
-        conta_id,
-        limite,
-    ))
-
-    resultados = cursor.fetchall()
-
-    conn.close()
-
-    return resultados
 
 
 def excluir_conta(
@@ -570,13 +368,6 @@ def excluir_conta(
 
     conn = conectar()
     cursor = conn.cursor()
-
-    cursor.execute("""
-        DELETE FROM historico_verificacoes
-        WHERE conta_id = ?
-    """, (
-        conta_id,
-    ))
 
     cursor.execute("""
         DELETE FROM contas
@@ -594,15 +385,15 @@ def excluir_conta(
 
 
 # =========================================================
-# VERIFICAÃ‡ÃƒO PERIÃ“DICA
+# VERIFICAÇÃO PERIÓDICA
 # =========================================================
 
 def listar_contas_para_verificar(
     intervalo_dias,
 ):
     """
-    Retorna as contas ativas cuja Ãºltima
-    verificaÃ§Ã£o foi hÃ¡ mais dias do que o
+    Retorna as contas ativas cuja última
+    verificação foi há mais dias do que o
     intervalo definido.
     """
 
@@ -654,42 +445,3 @@ def contar_contas():
         return total, ativas
 
     return 0, 0
-
-
-# =========================================================
-# RESUMO DE CUSTOS
-# =========================================================
-
-def resumo_custos():
-    """
-    Retorna um dicionÃ¡rio com o total investido na
-    criaÃ§Ã£o das contas (soma de custo_criacao),
-    separado por status.
-    """
-
-    conn = conectar()
-    cursor = conn.cursor()
-
-    cursor.execute("""
-        SELECT
-            COUNT(*),
-            COUNT(CASE WHEN custo_criacao IS NOT NULL THEN 1 END),
-            SUM(custo_criacao),
-            SUM(CASE WHEN status = 'ativa'
-                THEN custo_criacao ELSE 0 END),
-            SUM(CASE WHEN status != 'ativa'
-                THEN custo_criacao ELSE 0 END)
-        FROM contas
-    """)
-
-    resultado = cursor.fetchone()
-
-    conn.close()
-
-    return {
-        "total_contas": int(resultado[0] or 0),
-        "contas_com_custo": int(resultado[1] or 0),
-        "total_gasto": float(resultado[2] or 0),
-        "gasto_ativas": float(resultado[3] or 0),
-        "gasto_inativas": float(resultado[4] or 0),
-    }
