@@ -39,10 +39,50 @@ def criar_tabelas():
         )
     """)
 
+    # -----------------------------------------------------
+    # TAGS / RESULTADO DA VERIFICAÇÃO
+    # -----------------------------------------------------
+
+    try:
+        cursor.execute("""
+            ALTER TABLE contas
+            ADD COLUMN tags TEXT
+        """)
+    except sqlite3.OperationalError:
+        pass
+
+    try:
+        cursor.execute("""
+            ALTER TABLE contas
+            ADD COLUMN ultimo_resultado_verificacao
+            TEXT
+        """)
+    except sqlite3.OperationalError:
+        pass
+
+    try:
+        cursor.execute("""
+            ALTER TABLE contas
+            ADD COLUMN contagem_problemas
+            INTEGER DEFAULT 0
+        """)
+    except sqlite3.OperationalError:
+        pass
+
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS configuracoes (
             chave TEXT PRIMARY KEY,
             valor TEXT
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS
+        verificacoes_historico (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            conta_id INTEGER NOT NULL,
+            resultado TEXT NOT NULL,
+            data TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
 
@@ -119,6 +159,7 @@ def cadastrar_conta(
     fornecedor,
     telas_perfis,
     observacoes,
+    tags=None,
 ):
 
     conn = conectar()
@@ -134,9 +175,10 @@ def cadastrar_conta(
             custo_criacao,
             fornecedor,
             telas_perfis,
-            observacoes
+            observacoes,
+            tags
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         servico,
         email,
@@ -146,6 +188,7 @@ def cadastrar_conta(
         fornecedor,
         telas_perfis,
         observacoes,
+        tags,
     ))
 
     conta_id = cursor.lastrowid
@@ -195,6 +238,109 @@ def listar_contas(
     return resultados
 
 
+def listar_contas_filtrado(
+    servico=None,
+    status=None,
+    tag=None,
+):
+
+    conn = conectar()
+    cursor = conn.cursor()
+
+    condicoes = []
+    parametros = []
+
+    if servico:
+        condicoes.append("servico = ?")
+        parametros.append(servico)
+
+    if status:
+        condicoes.append("status = ?")
+        parametros.append(status)
+
+    if tag:
+        condicoes.append(
+            "tags LIKE ? COLLATE NOCASE"
+        )
+        parametros.append(f"%{tag}%")
+
+    where = (
+        "WHERE " + " AND ".join(condicoes)
+        if condicoes
+        else ""
+    )
+
+    cursor.execute(
+        f"""
+        SELECT
+            id,
+            servico,
+            email,
+            status
+        FROM contas
+        {where}
+        ORDER BY servico, id
+        """,
+        parametros,
+    )
+
+    resultados = cursor.fetchall()
+
+    conn.close()
+
+    return resultados
+
+
+def listar_servicos_distintos():
+
+    conn = conectar()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT DISTINCT servico
+        FROM contas
+        ORDER BY servico
+    """)
+
+    resultados = cursor.fetchall()
+
+    conn.close()
+
+    return [linha[0] for linha in resultados]
+
+
+def listar_tags_distintas():
+
+    conn = conectar()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT tags
+        FROM contas
+        WHERE tags IS NOT NULL
+        AND tags != ''
+    """)
+
+    resultados = cursor.fetchall()
+
+    conn.close()
+
+    tags_unicas = set()
+
+    for linha in resultados:
+
+        partes = (linha[0] or "").split(",")
+
+        for parte in partes:
+
+            tag_limpa = parte.strip()
+
+            if tag_limpa:
+                tags_unicas.add(tag_limpa)
+
+    return sorted(tags_unicas)
+
+
 def buscar_conta(
     conta_id,
 ):
@@ -215,7 +361,10 @@ def buscar_conta(
             observacoes,
             status,
             ultima_verificacao,
-            criado_em
+            criado_em,
+            tags,
+            ultimo_resultado_verificacao,
+            contagem_problemas
         FROM contas
         WHERE id = ?
     """, (
@@ -275,6 +424,7 @@ CAMPOS_EDITAVEIS = {
     "fornecedor": "fornecedor",
     "telas_perfis": "telas_perfis",
     "observacoes": "observacoes",
+    "tags": "tags",
 }
 
 
@@ -341,25 +491,85 @@ def definir_status_conta(
 
 def marcar_conta_verificada(
     conta_id,
+    resultado="ok",
+):
+
+    conn = conectar()
+    cursor = conn.cursor()
+
+    if resultado == "problema":
+
+        cursor.execute("""
+            UPDATE contas
+            SET ultima_verificacao = CURRENT_TIMESTAMP,
+                ultimo_resultado_verificacao = ?,
+                contagem_problemas = contagem_problemas + 1
+            WHERE id = ?
+        """, (
+            resultado,
+            conta_id,
+        ))
+
+    else:
+
+        cursor.execute("""
+            UPDATE contas
+            SET ultima_verificacao = CURRENT_TIMESTAMP,
+                ultimo_resultado_verificacao = ?
+            WHERE id = ?
+        """, (
+            resultado,
+            conta_id,
+        ))
+
+    alterado = cursor.rowcount > 0
+
+    if alterado:
+
+        cursor.execute("""
+            INSERT INTO verificacoes_historico
+            (
+                conta_id,
+                resultado
+            )
+            VALUES (?, ?)
+        """, (
+            conta_id,
+            resultado,
+        ))
+
+    conn.commit()
+    conn.close()
+
+    return alterado
+
+
+def listar_historico_verificacoes(
+    conta_id,
+    limite=5,
 ):
 
     conn = conectar()
     cursor = conn.cursor()
 
     cursor.execute("""
-        UPDATE contas
-        SET ultima_verificacao = CURRENT_TIMESTAMP
-        WHERE id = ?
+        SELECT
+            resultado,
+            data
+        FROM verificacoes_historico
+        WHERE conta_id = ?
+        ORDER BY data DESC
+        LIMIT ?
     """, (
         conta_id,
+        limite,
     ))
 
-    alterado = cursor.rowcount > 0
+    resultados = cursor.fetchall()
 
-    conn.commit()
     conn.close()
 
-    return alterado
+    return resultados
 
 
 def excluir_conta(
@@ -445,3 +655,93 @@ def contar_contas():
         return total, ativas
 
     return 0, 0
+
+
+# =========================================================
+# RESUMO DE CUSTOS
+# =========================================================
+
+def obter_resumo_custos():
+
+    conn = conectar()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT
+            COALESCE(SUM(custo_criacao), 0),
+            COALESCE(SUM(
+                CASE WHEN status = 'ativa'
+                THEN custo_criacao ELSE 0 END
+            ), 0),
+            COUNT(
+                CASE WHEN custo_criacao IS NOT NULL
+                THEN 1 END
+            )
+        FROM contas
+    """)
+
+    resultado = cursor.fetchone()
+
+    conn.close()
+
+    if resultado:
+        return (
+            float(resultado[0] or 0),
+            float(resultado[1] or 0),
+            int(resultado[2] or 0),
+        )
+
+    return 0.0, 0.0, 0
+
+
+def obter_custo_por_servico():
+
+    conn = conectar()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT
+            servico,
+            COALESCE(SUM(custo_criacao), 0),
+            COUNT(*)
+        FROM contas
+        GROUP BY servico
+        ORDER BY SUM(custo_criacao) DESC
+    """)
+
+    resultados = cursor.fetchall()
+
+    conn.close()
+
+    return resultados
+
+
+# =========================================================
+# VERIFICAÇÃO EM LOTE
+# =========================================================
+
+def verificar_todas_pendentes(
+    intervalo_dias,
+    resultado="ok",
+):
+    """
+    Marca como verificadas (com o resultado
+    informado) todas as contas ativas que
+    estão vencidas no intervalo de checagem.
+    Retorna quantas foram marcadas.
+    """
+
+    pendentes = listar_contas_para_verificar(
+        intervalo_dias
+    )
+
+    for conta in pendentes:
+
+        conta_id = conta[0]
+
+        marcar_conta_verificada(
+            conta_id,
+            resultado,
+        )
+
+    return len(pendentes)
