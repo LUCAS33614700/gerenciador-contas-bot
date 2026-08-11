@@ -26,16 +26,22 @@ from database import (
     criar_tabelas,
     cadastrar_conta,
     listar_contas,
+    listar_contas_filtrado,
+    listar_servicos_distintos,
     buscar_conta,
     buscar_contas_por_termo,
     atualizar_campo_conta,
     definir_status_conta,
     marcar_conta_verificada,
+    listar_historico_verificacoes,
     excluir_conta,
     listar_contas_para_verificar,
     contar_contas,
     definir_configuracao,
     obter_configuracao,
+    obter_resumo_custos,
+    obter_custo_por_servico,
+    verificar_todas_pendentes,
 )
 
 
@@ -55,6 +61,7 @@ CAMPOS_CADASTRO = [
     ("custo_criacao", "💰 Custo de criação (ex: 15.00, ou envie \"pular\")"),
     ("fornecedor", "🏷️ Fornecedor/origem (ou envie \"pular\")"),
     ("telas_perfis", "🖥️ Telas/perfis já usados (ou envie \"pular\")"),
+    ("tags", "🏷️ Tags, separadas por vírgula (ex: vip, revisar, ou envie \"pular\")"),
     ("observacoes", "📝 Observações gerais (ou envie \"pular\")"),
 ]
 
@@ -121,6 +128,18 @@ def menu_principal():
                 InlineKeyboardButton(
                     "🔍 BUSCAR",
                     callback_data="buscar",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "✅ VERIFICAÇÃO EM LOTE",
+                    callback_data="lote_iniciar",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "💰 RESUMO DE CUSTOS",
+                    callback_data="resumo_custos",
                 )
             ],
             [
@@ -230,6 +249,7 @@ async def processar_passo_cadastro(
         fornecedor=dados.get("fornecedor"),
         telas_perfis=dados.get("telas_perfis"),
         observacoes=dados.get("observacoes"),
+        tags=dados.get("tags"),
     )
 
     context.user_data.clear()
@@ -269,29 +289,85 @@ CONTAS_POR_PAGINA = 8
 
 async def mostrar_lista_contas(
     query,
+    context,
     pagina=1,
 ):
-    contas = listar_contas()
+    filtro_servico = context.user_data.get(
+        "filtro_servico"
+    )
+    filtro_status = context.user_data.get(
+        "filtro_status"
+    )
+
+    if filtro_servico or filtro_status:
+        contas = listar_contas_filtrado(
+            servico=filtro_servico,
+            status=filtro_status,
+        )
+    else:
+        contas = listar_contas()
+
+    linha_filtro = []
+
+    if filtro_servico or filtro_status:
+
+        descricao_filtro = []
+
+        if filtro_servico:
+            descricao_filtro.append(filtro_servico)
+
+        if filtro_status:
+            descricao_filtro.append(
+                "Ativas"
+                if filtro_status == "ativa"
+                else "Inativas"
+            )
+
+        linha_filtro.append(
+            InlineKeyboardButton(
+                f"🔽 Filtro: {' + '.join(descricao_filtro)}",
+                callback_data="filtrar_menu",
+            )
+        )
+        linha_filtro.append(
+            InlineKeyboardButton(
+                "🔄 Limpar",
+                callback_data="limpar_filtros",
+            )
+        )
+    else:
+        linha_filtro.append(
+            InlineKeyboardButton(
+                "🔽 Filtrar",
+                callback_data="filtrar_menu",
+            )
+        )
 
     if not contas:
+        botoes_vazio = [linha_filtro]
+        botoes_vazio.append(
+            [
+                InlineKeyboardButton(
+                    "➕ Nova conta",
+                    callback_data="nova_conta",
+                )
+            ]
+        )
+        botoes_vazio.append(
+            [
+                InlineKeyboardButton(
+                    "🏠 Menu",
+                    callback_data="menu",
+                )
+            ]
+        )
+
         await query.edit_message_text(
             "📋 *LISTAR CONTAS*\n\n"
-            "Nenhuma conta cadastrada ainda.",
+            "Nenhuma conta encontrada com esse "
+            "filtro.",
             reply_markup=InlineKeyboardMarkup(
-                [
-                    [
-                        InlineKeyboardButton(
-                            "➕ Nova conta",
-                            callback_data="nova_conta",
-                        )
-                    ],
-                    [
-                        InlineKeyboardButton(
-                            "🏠 Menu",
-                            callback_data="menu",
-                        )
-                    ],
-                ]
+                botoes_vazio
             ),
             parse_mode="Markdown",
         )
@@ -306,7 +382,7 @@ async def mostrar_lista_contas(
     inicio = (pagina - 1) * CONTAS_POR_PAGINA
     fim = inicio + CONTAS_POR_PAGINA
 
-    botoes = []
+    botoes = [linha_filtro]
 
     for conta in contas[inicio:fim]:
 
@@ -363,9 +439,299 @@ async def mostrar_lista_contas(
     await query.edit_message_text(
         "📋 *LISTAR CONTAS*\n\n"
         f"Página {pagina}/{total_paginas} — "
-        f"{len(contas)} conta(s) no total:",
+        f"{len(contas)} conta(s):",
         reply_markup=InlineKeyboardMarkup(
             botoes
+        ),
+        parse_mode="Markdown",
+    )
+
+
+# =========================================================
+# FILTROS
+# =========================================================
+
+async def mostrar_menu_filtro(
+    query,
+    context,
+):
+    await query.edit_message_text(
+        "🔽 *FILTRAR CONTAS*\n\n"
+        "Escolha como filtrar:",
+        reply_markup=InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        "📺 Por Serviço",
+                        callback_data="filtrar_servico",
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        "📊 Por Status",
+                        callback_data="filtrar_status",
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        "🔄 Limpar Filtros",
+                        callback_data="limpar_filtros",
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        "⬅️ Voltar",
+                        callback_data="listar_1",
+                    )
+                ],
+            ]
+        ),
+        parse_mode="Markdown",
+    )
+
+
+async def mostrar_filtro_servico(
+    query,
+    context,
+):
+    servicos = listar_servicos_distintos()
+
+    if not servicos:
+        await query.answer(
+            "❌ Nenhum serviço cadastrado ainda.",
+            show_alert=True,
+        )
+        return
+
+    context.user_data["servicos_disponiveis"] = (
+        servicos
+    )
+
+    botoes = []
+
+    for indice, servico in enumerate(servicos):
+        botoes.append(
+            [
+                InlineKeyboardButton(
+                    servico[:60],
+                    callback_data=(
+                        f"setfiltroservico_{indice}"
+                    ),
+                )
+            ]
+        )
+
+    botoes.append(
+        [
+            InlineKeyboardButton(
+                "⬅️ Voltar",
+                callback_data="filtrar_menu",
+            )
+        ]
+    )
+
+    await query.edit_message_text(
+        "📺 *FILTRAR POR SERVIÇO*\n\n"
+        "Escolha o serviço:",
+        reply_markup=InlineKeyboardMarkup(
+            botoes
+        ),
+        parse_mode="Markdown",
+    )
+
+
+async def mostrar_filtro_status(
+    query,
+    context,
+):
+    await query.edit_message_text(
+        "📊 *FILTRAR POR STATUS*\n\n"
+        "Escolha o status:",
+        reply_markup=InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        "✅ Ativas",
+                        callback_data=(
+                            "setfiltrostatus_ativa"
+                        ),
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        "⚫ Inativas",
+                        callback_data=(
+                            "setfiltrostatus_inativa"
+                        ),
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        "⬅️ Voltar",
+                        callback_data="filtrar_menu",
+                    )
+                ],
+            ]
+        ),
+        parse_mode="Markdown",
+    )
+
+
+# =========================================================
+# RESUMO DE CUSTOS
+# =========================================================
+
+async def mostrar_resumo_custos(
+    query,
+    context,
+):
+    total, total_ativas, quantidade = (
+        obter_resumo_custos()
+    )
+
+    por_servico = obter_custo_por_servico()
+
+    texto = (
+        "💰 *RESUMO DE CUSTOS*\n\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        f"💵 *Total investido:* R$ {total:.2f}\n"
+        f"✅ *Em contas ativas:* "
+        f"R$ {total_ativas:.2f}\n"
+        f"📦 *Contas com custo informado:* "
+        f"{quantidade}\n"
+        "━━━━━━━━━━━━━━━━━━\n\n"
+        "*Por serviço:*\n\n"
+    )
+
+    for servico, soma, qtd in por_servico:
+        texto += (
+            f"📺 {servico}: R$ {soma:.2f} "
+            f"({qtd} conta(s))\n"
+        )
+
+    await query.edit_message_text(
+        texto,
+        reply_markup=InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        "🏠 Menu",
+                        callback_data="menu",
+                    )
+                ]
+            ]
+        ),
+        parse_mode="Markdown",
+    )
+
+
+# =========================================================
+# VERIFICAÇÃO EM LOTE
+# =========================================================
+
+async def mostrar_confirmacao_lote(
+    query,
+    context,
+):
+    intervalo = int(
+        obter_configuracao("intervalo_dias")
+        or INTERVALO_PADRAO_DIAS
+    )
+
+    pendentes = listar_contas_para_verificar(
+        intervalo
+    )
+
+    if not pendentes:
+        await query.edit_message_text(
+            "✅ *VERIFICAÇÃO EM LOTE*\n\n"
+            "Nenhuma conta pendente de "
+            "verificação no momento. 🎉",
+            reply_markup=InlineKeyboardMarkup(
+                [
+                    [
+                        InlineKeyboardButton(
+                            "🏠 Menu",
+                            callback_data="menu",
+                        )
+                    ]
+                ]
+            ),
+            parse_mode="Markdown",
+        )
+        return
+
+    texto = (
+        "✅ *VERIFICAÇÃO EM LOTE*\n\n"
+        f"{len(pendentes)} conta(s) pendente(s):\n\n"
+    )
+
+    for conta in pendentes[:15]:
+        _, servico, email, _ = conta
+        texto += f"📦 {servico}"
+        if email:
+            texto += f" ({email[:20]})"
+        texto += "\n"
+
+    if len(pendentes) > 15:
+        texto += (
+            f"\n_...e mais {len(pendentes) - 15}._\n"
+        )
+
+    texto += (
+        "\nMarcar todas como *✅ OK, "
+        "funcionando* de uma vez?"
+    )
+
+    await query.edit_message_text(
+        texto,
+        reply_markup=InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        "✅ SIM, MARCAR TODAS",
+                        callback_data="lote_confirmar",
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        "❌ Cancelar",
+                        callback_data="menu",
+                    )
+                ],
+            ]
+        ),
+        parse_mode="Markdown",
+    )
+
+
+async def executar_lote(
+    query,
+    context,
+):
+    intervalo = int(
+        obter_configuracao("intervalo_dias")
+        or INTERVALO_PADRAO_DIAS
+    )
+
+    quantidade = verificar_todas_pendentes(
+        intervalo,
+        "ok",
+    )
+
+    await query.edit_message_text(
+        "✅ *VERIFICAÇÃO EM LOTE CONCLUÍDA!*\n\n"
+        f"{quantidade} conta(s) marcada(s) "
+        "como OK.",
+        reply_markup=InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        "🏠 Menu",
+                        callback_data="menu",
+                    )
+                ]
+            ]
         ),
         parse_mode="Markdown",
     )
@@ -378,6 +744,7 @@ async def mostrar_lista_contas(
 async def mostrar_detalhes_conta(
     query,
     conta_id,
+    mostrar_senha=False,
 ):
     conta = buscar_conta(conta_id)
 
@@ -401,34 +768,73 @@ async def mostrar_detalhes_conta(
         status,
         ultima_verificacao,
         criado_em,
+        tags,
+        ultimo_resultado,
+        contagem_problemas,
     ) = conta
 
     emoji_status = (
         "✅ Ativa" if status == "ativa" else "⚫ Inativa"
     )
 
+    if mostrar_senha:
+        texto_senha = f"`{senha or '—'}`"
+    else:
+        texto_senha = "🔒 Oculta"
+
+    if ultimo_resultado == "problema":
+        texto_resultado = "⚠️ Com problema"
+    elif ultimo_resultado == "ok":
+        texto_resultado = "✅ OK"
+    else:
+        texto_resultado = "—"
+
     texto = (
         f"📦 *{servico}*\n"
         "━━━━━━━━━━━━━━━━━━\n"
         f"📧 Email: {email or '—'}\n"
-        f"🔑 Senha: `{senha or '—'}`\n"
+        f"🔑 Senha: {texto_senha}\n"
         f"🗓️ Criada em: {data_criacao or '—'}\n"
         f"💰 Custo: "
         f"{f'R$ {custo_criacao:.2f}' if custo_criacao else '—'}\n"
         f"🏷️ Fornecedor: {fornecedor or '—'}\n"
         f"🖥️ Telas/perfis: {telas_perfis or '—'}\n"
+        f"🏷️ Tags: {tags or '—'}\n"
         f"📝 Obs: {observacoes or '—'}\n"
         f"📊 Status: {emoji_status}\n"
         f"🔎 Última verificação: "
-        f"{str(ultima_verificacao)[:16]}\n"
+        f"{str(ultima_verificacao)[:16]} "
+        f"({texto_resultado})\n"
+        f"⚠️ Problemas registrados: "
+        f"{contagem_problemas or 0}\n"
         "━━━━━━━━━━━━━━━━━━"
     )
 
     botoes = [
         [
             InlineKeyboardButton(
-                "✅ MARCAR COMO VERIFICADA",
-                callback_data=f"verificar_{conta_id}",
+                (
+                    "🙈 OCULTAR SENHA"
+                    if mostrar_senha
+                    else "👁️ MOSTRAR SENHA"
+                ),
+                callback_data=(
+                    f"ocultarsenha_{conta_id}"
+                    if mostrar_senha
+                    else f"mostrarsenha_{conta_id}"
+                ),
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "✅ MARCAR VERIFICAÇÃO",
+                callback_data=f"verificarmenu_{conta_id}",
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "📜 HISTÓRICO",
+                callback_data=f"historico_{conta_id}",
             )
         ],
         [
@@ -470,6 +876,100 @@ async def mostrar_detalhes_conta(
     )
 
 
+async def mostrar_menu_verificar(
+    query,
+    conta_id,
+):
+    await query.edit_message_text(
+        "✅ *MARCAR VERIFICAÇÃO*\n\n"
+        "Como está a conta?",
+        reply_markup=InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        "✅ OK, funcionando",
+                        callback_data=(
+                            f"verificarresultado_{conta_id}_ok"
+                        ),
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        "⚠️ Com problema",
+                        callback_data=(
+                            f"verificarresultado_{conta_id}_problema"
+                        ),
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        "❌ Cancelar",
+                        callback_data=f"conta_{conta_id}",
+                    )
+                ],
+            ]
+        ),
+        parse_mode="Markdown",
+    )
+
+
+async def mostrar_historico_conta(
+    query,
+    conta_id,
+):
+    conta = buscar_conta(conta_id)
+
+    if not conta:
+        await query.answer(
+            "❌ Conta não encontrada.",
+            show_alert=True,
+        )
+        return
+
+    historico = listar_historico_verificacoes(
+        conta_id,
+        limite=10,
+    )
+
+    if not historico:
+        texto = (
+            "📜 *HISTÓRICO DE VERIFICAÇÕES*\n\n"
+            f"📦 {conta[1]}\n\n"
+            "Nenhuma verificação registrada ainda."
+        )
+    else:
+        texto = (
+            "📜 *HISTÓRICO DE VERIFICAÇÕES*\n\n"
+            f"📦 {conta[1]}\n\n"
+        )
+
+        for resultado, data in historico:
+
+            emoji = (
+                "✅" if resultado == "ok" else "⚠️"
+            )
+
+            texto += (
+                f"{emoji} {str(data)[:16]} — "
+                f"{'OK' if resultado == 'ok' else 'Problema'}\n"
+            )
+
+    await query.edit_message_text(
+        texto,
+        reply_markup=InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        "⬅️ Voltar",
+                        callback_data=f"conta_{conta_id}",
+                    )
+                ]
+            ]
+        ),
+        parse_mode="Markdown",
+    )
+
+
 # =========================================================
 # EDITAR CAMPO
 # =========================================================
@@ -483,6 +983,7 @@ NOMES_CAMPOS = {
     "fornecedor": "Fornecedor",
     "telas_perfis": "Telas/perfis",
     "observacoes": "Observações",
+    "tags": "Tags",
 }
 
 
@@ -1057,6 +1558,7 @@ async def botoes(
 
         await mostrar_lista_contas(
             query,
+            context,
             pagina,
         )
         return
@@ -1264,6 +1766,208 @@ async def botoes(
         await iniciar_busca(
             query,
             context,
+        )
+        return
+
+    if acao == "filtrar_menu":
+        await mostrar_menu_filtro(
+            query,
+            context,
+        )
+        return
+
+    if acao == "filtrar_servico":
+        await mostrar_filtro_servico(
+            query,
+            context,
+        )
+        return
+
+    if acao == "filtrar_status":
+        await mostrar_filtro_status(
+            query,
+            context,
+        )
+        return
+
+    if acao.startswith("setfiltroservico_"):
+        try:
+            indice = int(
+                acao.replace(
+                    "setfiltroservico_", "", 1
+                )
+            )
+            servicos = context.user_data.get(
+                "servicos_disponiveis", []
+            )
+            context.user_data["filtro_servico"] = (
+                servicos[indice]
+            )
+        except (ValueError, IndexError):
+            await query.answer(
+                "❌ Serviço inválido.",
+                show_alert=True,
+            )
+            return
+
+        await mostrar_lista_contas(
+            query,
+            context,
+            1,
+        )
+        return
+
+    if acao.startswith("setfiltrostatus_"):
+        context.user_data["filtro_status"] = (
+            acao.replace("setfiltrostatus_", "", 1)
+        )
+
+        await mostrar_lista_contas(
+            query,
+            context,
+            1,
+        )
+        return
+
+    if acao == "limpar_filtros":
+        context.user_data.pop("filtro_servico", None)
+        context.user_data.pop("filtro_status", None)
+
+        await mostrar_lista_contas(
+            query,
+            context,
+            1,
+        )
+        return
+
+    if acao == "resumo_custos":
+        await mostrar_resumo_custos(
+            query,
+            context,
+        )
+        return
+
+    if acao == "lote_iniciar":
+        await mostrar_confirmacao_lote(
+            query,
+            context,
+        )
+        return
+
+    if acao == "lote_confirmar":
+        await executar_lote(
+            query,
+            context,
+        )
+        return
+
+    if acao.startswith("mostrarsenha_"):
+        try:
+            conta_id = int(
+                acao.replace(
+                    "mostrarsenha_", "", 1
+                )
+            )
+        except ValueError:
+            await query.answer(
+                "❌ Conta inválida.",
+                show_alert=True,
+            )
+            return
+
+        await mostrar_detalhes_conta(
+            query,
+            conta_id,
+            mostrar_senha=True,
+        )
+        return
+
+    if acao.startswith("ocultarsenha_"):
+        try:
+            conta_id = int(
+                acao.replace(
+                    "ocultarsenha_", "", 1
+                )
+            )
+        except ValueError:
+            await query.answer(
+                "❌ Conta inválida.",
+                show_alert=True,
+            )
+            return
+
+        await mostrar_detalhes_conta(
+            query,
+            conta_id,
+            mostrar_senha=False,
+        )
+        return
+
+    if acao.startswith("verificarmenu_"):
+        try:
+            conta_id = int(
+                acao.replace(
+                    "verificarmenu_", "", 1
+                )
+            )
+        except ValueError:
+            await query.answer(
+                "❌ Conta inválida.",
+                show_alert=True,
+            )
+            return
+
+        await mostrar_menu_verificar(
+            query,
+            conta_id,
+        )
+        return
+
+    if acao.startswith("verificarresultado_"):
+        partes = acao.replace(
+            "verificarresultado_", "", 1
+        ).rsplit("_", 1)
+
+        try:
+            conta_id = int(partes[0])
+            resultado = partes[1]
+        except (ValueError, IndexError):
+            await query.answer(
+                "❌ Dados inválidos.",
+                show_alert=True,
+            )
+            return
+
+        marcar_conta_verificada(
+            conta_id,
+            resultado,
+        )
+
+        await query.answer(
+            "✅ Verificação registrada!"
+        )
+
+        await mostrar_detalhes_conta(
+            query,
+            conta_id,
+        )
+        return
+
+    if acao.startswith("historico_"):
+        try:
+            conta_id = int(
+                acao.replace("historico_", "", 1)
+            )
+        except ValueError:
+            await query.answer(
+                "❌ Conta inválida.",
+                show_alert=True,
+            )
+            return
+
+        await mostrar_historico_conta(
+            query,
+            conta_id,
         )
         return
 
