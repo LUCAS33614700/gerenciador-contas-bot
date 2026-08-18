@@ -49,6 +49,13 @@ from database import (
     listar_contas_com_vencimento,
     marcar_vencimento_notificado,
     obter_todas_contas_para_exportar,
+    cadastrar_perfil,
+    listar_perfis,
+    buscar_perfil,
+    atualizar_perfil,
+    liberar_perfil,
+    excluir_perfil,
+    duplicar_conta,
 )
 
 
@@ -60,6 +67,9 @@ INTERVALO_PADRAO_DIAS = 30
 INTERVALO_CHECAGEM_LOOP = 6 * 60 * 60  # a cada 6h
 VERIFICADOR_TASK = "verificador_contas_task"
 DIAS_AVISO_VENCIMENTO = 3
+JANELA_VENCENDO_DIAS = 7
+BACKUP_TASK = "backup_semanal_task"
+INTERVALO_BACKUP_SEGUNDOS = 7 * 24 * 60 * 60
 
 CAMPOS_CADASTRO = [
     ("servico", "📺 Serviço (ex: Netflix, Disney+)"),
@@ -147,6 +157,12 @@ def menu_principal():
                 InlineKeyboardButton(
                     "📂 CATEGORIAS",
                     callback_data="categorias",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "⏰ VENCENDO EM BREVE",
+                    callback_data="vencendo",
                 )
             ],
             [
@@ -708,6 +724,134 @@ async def mostrar_categorias(
 
 
 # =========================================================
+# VENCENDO EM BREVE
+# =========================================================
+
+def calcular_contas_vencendo(dias_janela):
+    """
+    Retorna, ordenado do mais urgente pro menos
+    urgente, as contas ativas cujo vencimento cai
+    dentro da janela de dias informada (incluindo
+    as já vencidas).
+    """
+    contas = listar_contas_com_vencimento()
+
+    hoje = date.today()
+
+    resultado = []
+
+    for (
+        conta_id,
+        servico,
+        email,
+        data_vencimento,
+        _notificado_em,
+    ) in contas:
+
+        data_venc_obj = parse_data_br(data_vencimento)
+
+        if not data_venc_obj:
+            continue
+
+        dias_restantes = (data_venc_obj - hoje).days
+
+        if dias_restantes > dias_janela:
+            continue
+
+        resultado.append(
+            (conta_id, servico, email, dias_restantes)
+        )
+
+    resultado.sort(key=lambda item: item[3])
+
+    return resultado
+
+
+async def mostrar_vencendo(
+    query,
+    context,
+):
+    pendentes = calcular_contas_vencendo(
+        JANELA_VENCENDO_DIAS
+    )
+
+    if not pendentes:
+        await query.edit_message_text(
+            "⏰ *VENCENDO EM BREVE*\n\n"
+            f"Nenhuma conta vence nos próximos "
+            f"{JANELA_VENCENDO_DIAS} dias. 🎉",
+            reply_markup=InlineKeyboardMarkup(
+                [
+                    [
+                        InlineKeyboardButton(
+                            "🏠 Menu",
+                            callback_data="menu",
+                        )
+                    ]
+                ]
+            ),
+            parse_mode="Markdown",
+        )
+        return
+
+    texto = (
+        "⏰ *VENCENDO EM BREVE*\n\n"
+        f"Próximos {JANELA_VENCENDO_DIAS} dias "
+        "(e vencidas):\n\n"
+    )
+
+    botoes = []
+
+    for conta_id, servico, email, dias_restantes in (
+        pendentes[:20]
+    ):
+
+        rotulo = servico
+
+        if email:
+            rotulo += f" ({email[:20]})"
+
+        if dias_restantes < 0:
+            texto += (
+                f"🔴 {rotulo} — vencida há "
+                f"{abs(dias_restantes)} dia(s)\n"
+            )
+        elif dias_restantes == 0:
+            texto += f"🟠 {rotulo} — vence hoje\n"
+        else:
+            texto += (
+                f"🟡 {rotulo} — vence em "
+                f"{dias_restantes} dia(s)\n"
+            )
+
+        botoes.append(
+            [
+                InlineKeyboardButton(
+                    rotulo[:60],
+                    callback_data=f"conta_{conta_id}",
+                )
+            ]
+        )
+
+    botoes.append(
+        [
+            InlineKeyboardButton(
+                "🏠 Menu",
+                callback_data="menu",
+            )
+        ]
+    )
+
+    await query.edit_message_text(
+        texto,
+        reply_markup=InlineKeyboardMarkup(
+            botoes
+        ),
+        parse_mode="Markdown",
+    )
+
+
+# =========================================================
 # RESUMO DE CUSTOS
 # =========================================================
 
@@ -777,18 +921,15 @@ CABECALHO_EXPORT_CSV = [
 ]
 
 
-async def exportar_contas_csv(
-    query,
-    context,
-):
+def construir_csv_contas():
+    """
+    Monta o CSV com todas as contas em memória.
+    Retorna None se não houver nenhuma conta.
+    """
     contas = obter_todas_contas_para_exportar()
 
     if not contas:
-        await query.answer(
-            "❌ Nenhuma conta cadastrada ainda.",
-            show_alert=True,
-        )
-        return
+        return None
 
     buffer_texto = io.StringIO()
     escritor = csv.writer(buffer_texto)
@@ -805,17 +946,523 @@ async def exportar_contas_csv(
         f"contas_{date.today().isoformat()}.csv"
     )
 
+    return buffer_bytes, len(contas)
+
+
+async def exportar_contas_csv(
+    query,
+    context,
+):
+    resultado = construir_csv_contas()
+
+    if not resultado:
+        await query.answer(
+            "❌ Nenhuma conta cadastrada ainda.",
+            show_alert=True,
+        )
+        return
+
+    buffer_bytes, total = resultado
+
     await query.message.reply_document(
         document=buffer_bytes,
         filename=buffer_bytes.name,
         caption=(
             "📤 *EXPORTAÇÃO CONCLUÍDA*\n\n"
-            f"📦 {len(contas)} conta(s) exportada(s).\n"
+            f"📦 {total} conta(s) exportada(s).\n"
             "⚠️ Este arquivo contém as senhas em "
             "texto puro — guarde com cuidado."
         ),
         parse_mode="Markdown",
     )
+
+
+# =========================================================
+# PERFIS/TELAS (COM CLIENTE)
+# =========================================================
+
+CAMPOS_OCUPAR_PERFIL = [
+    ("cliente_nome", "🙍 Nome do cliente"),
+    (
+        "cliente_contato",
+        "📞 Contato do cliente (telefone/usuário, "
+        "ou envie \"pular\")",
+    ),
+    (
+        "data_venda",
+        "🗓️ Data da venda (DD/MM/AAAA, ou envie "
+        "\"pular\")",
+    ),
+    (
+        "observacoes",
+        "📝 Observações (ou envie \"pular\")",
+    ),
+]
+
+
+async def mostrar_perfis_conta(
+    query,
+    context,
+    conta_id,
+):
+    conta = buscar_conta(conta_id)
+
+    if not conta:
+        await query.answer(
+            "❌ Conta não encontrada.",
+            show_alert=True,
+        )
+        return
+
+    servico = conta[1]
+    perfis = listar_perfis(conta_id)
+
+    texto = f"👥 *PERFIS/TELAS — {servico}*\n\n"
+
+    botoes = []
+
+    if not perfis:
+        texto += "Nenhum perfil cadastrado ainda."
+    else:
+        for (
+            perfil_id,
+            nome,
+            ocupado,
+            cliente_nome,
+            _cliente_contato,
+            _data_venda,
+            _observacoes,
+        ) in perfis:
+
+            if ocupado:
+                rotulo = f"🔴 {nome} — {cliente_nome or '?'}"
+            else:
+                rotulo = f"🟢 {nome} — livre"
+
+            botoes.append(
+                [
+                    InlineKeyboardButton(
+                        rotulo[:60],
+                        callback_data=(
+                            f"perfil_{perfil_id}"
+                        ),
+                    )
+                ]
+            )
+
+    botoes.append(
+        [
+            InlineKeyboardButton(
+                "➕ Adicionar perfil",
+                callback_data=f"addperfil_{conta_id}",
+            )
+        ]
+    )
+    botoes.append(
+        [
+            InlineKeyboardButton(
+                "🔙 Voltar",
+                callback_data=f"conta_{conta_id}",
+            )
+        ]
+    )
+
+    await query.edit_message_text(
+        texto,
+        reply_markup=InlineKeyboardMarkup(botoes),
+        parse_mode="Markdown",
+    )
+
+
+async def mostrar_perfil_detalhe(
+    query,
+    context,
+    perfil_id,
+):
+    perfil = buscar_perfil(perfil_id)
+
+    if not perfil:
+        await query.answer(
+            "❌ Perfil não encontrado.",
+            show_alert=True,
+        )
+        return
+
+    (
+        _id,
+        conta_id,
+        nome,
+        ocupado,
+        cliente_nome,
+        cliente_contato,
+        data_venda,
+        observacoes,
+    ) = perfil
+
+    texto = f"👤 *{nome}*\n\n"
+
+    botoes = []
+
+    if ocupado:
+        texto += (
+            f"Status: 🔴 Ocupado\n"
+            f"🙍 Cliente: {cliente_nome or '—'}\n"
+            f"📞 Contato: {cliente_contato or '—'}\n"
+            f"🗓️ Venda: {data_venda or '—'}\n"
+            f"📝 Obs: {observacoes or '—'}\n"
+        )
+        botoes.append(
+            [
+                InlineKeyboardButton(
+                    "🟢 Liberar perfil",
+                    callback_data=(
+                        f"liberarperfil_{perfil_id}"
+                    ),
+                )
+            ]
+        )
+    else:
+        texto += "Status: 🟢 Livre\n"
+        botoes.append(
+            [
+                InlineKeyboardButton(
+                    "🔴 Marcar ocupado / vincular"
+                    " cliente",
+                    callback_data=(
+                        f"ocuparperfil_{perfil_id}"
+                    ),
+                )
+            ]
+        )
+
+    botoes.append(
+        [
+            InlineKeyboardButton(
+                "🗑️ Excluir perfil",
+                callback_data=(
+                    f"excluirperfil_{perfil_id}"
+                ),
+            )
+        ]
+    )
+    botoes.append(
+        [
+            InlineKeyboardButton(
+                "🔙 Voltar",
+                callback_data=f"perfis_{conta_id}",
+            )
+        ]
+    )
+
+    await query.edit_message_text(
+        texto,
+        reply_markup=InlineKeyboardMarkup(botoes),
+        parse_mode="Markdown",
+    )
+
+
+async def iniciar_ocupar_perfil(
+    query,
+    context,
+    perfil_id,
+):
+    context.user_data.clear()
+    context.user_data["ocupar_perfil_id"] = perfil_id
+    context.user_data["ocupar_passo"] = 0
+    context.user_data["ocupar_dados"] = {}
+
+    campo, pergunta = CAMPOS_OCUPAR_PERFIL[0]
+
+    await query.edit_message_text(
+        f"👤 *VINCULAR CLIENTE*\n\n{pergunta}:",
+        reply_markup=InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        "❌ Cancelar",
+                        callback_data=(
+                            f"perfil_{perfil_id}"
+                        ),
+                    )
+                ]
+            ]
+        ),
+        parse_mode="Markdown",
+    )
+
+
+async def processar_passo_ocupar_perfil(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    if "ocupar_passo" not in context.user_data:
+        return False
+
+    if not update.message or not update.message.text:
+        return True
+
+    passo = context.user_data["ocupar_passo"]
+    perfil_id = context.user_data["ocupar_perfil_id"]
+    campo, _pergunta = CAMPOS_OCUPAR_PERFIL[passo]
+    texto = update.message.text.strip()
+
+    if campo == "cliente_nome":
+        if texto.lower() == "pular":
+            await update.message.reply_text(
+                "❌ O nome do cliente é obrigatório."
+            )
+            return True
+        valor = texto
+    elif campo == "data_venda":
+        if texto.lower() == "pular":
+            valor = ""
+        elif not parse_data_br(texto):
+            await update.message.reply_text(
+                "❌ Data inválida. Use o formato "
+                "DD/MM/AAAA ou envie \"pular\"."
+            )
+            return True
+        else:
+            valor = texto
+    else:
+        valor = "" if texto.lower() == "pular" else texto
+
+    context.user_data["ocupar_dados"][campo] = valor
+
+    proximo_passo = passo + 1
+
+    if proximo_passo < len(CAMPOS_OCUPAR_PERFIL):
+        context.user_data["ocupar_passo"] = proximo_passo
+
+        _campo_prox, pergunta_prox = (
+            CAMPOS_OCUPAR_PERFIL[proximo_passo]
+        )
+
+        await update.message.reply_text(
+            f"{pergunta_prox}:"
+        )
+        return True
+
+    dados = context.user_data["ocupar_dados"]
+
+    atualizar_perfil(
+        perfil_id,
+        ocupado=1,
+        cliente_nome=dados.get("cliente_nome"),
+        cliente_contato=dados.get(
+            "cliente_contato", ""
+        ),
+        data_venda=dados.get("data_venda", ""),
+        observacoes=dados.get("observacoes", ""),
+    )
+
+    context.user_data.clear()
+
+    await update.message.reply_text(
+        "✅ Perfil vinculado ao cliente!",
+        reply_markup=InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        "👤 Ver perfil",
+                        callback_data=(
+                            f"perfil_{perfil_id}"
+                        ),
+                    )
+                ]
+            ]
+        ),
+    )
+
+    return True
+
+
+async def iniciar_add_perfil(
+    query,
+    context,
+    conta_id,
+):
+    context.user_data.clear()
+    context.user_data["addperfil_conta_id"] = conta_id
+
+    await query.edit_message_text(
+        "➕ *ADICIONAR PERFIL*\n\n"
+        "Digite um nome/identificador pro perfil "
+        "(ex: \"Tela 1\", \"Perfil principal\"):",
+        reply_markup=InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        "❌ Cancelar",
+                        callback_data=(
+                            f"perfis_{conta_id}"
+                        ),
+                    )
+                ]
+            ]
+        ),
+        parse_mode="Markdown",
+    )
+
+
+async def processar_add_perfil(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    conta_id = context.user_data.get(
+        "addperfil_conta_id"
+    )
+
+    if not conta_id:
+        return False
+
+    if not update.message or not update.message.text:
+        return True
+
+    nome = update.message.text.strip()
+
+    if not nome:
+        await update.message.reply_text(
+            "❌ Digite um nome válido."
+        )
+        return True
+
+    novo_id = cadastrar_perfil(conta_id, nome)
+
+    context.user_data.clear()
+
+    await update.message.reply_text(
+        f"✅ Perfil \"{nome}\" criado!",
+        reply_markup=InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        "👥 Ver perfis",
+                        callback_data=(
+                            f"perfis_{conta_id}"
+                        ),
+                    )
+                ]
+            ]
+        ),
+    )
+
+    return True
+
+
+# =========================================================
+# DUPLICAR CONTA
+# =========================================================
+
+CAMPOS_DUPLICAR = [
+    (
+        "novo_email",
+        "📧 Novo email/login pra essa cópia "
+        "(ou envie \"pular\" pra manter o mesmo)",
+    ),
+    (
+        "nova_senha",
+        "🔑 Nova senha (ou envie \"pular\" pra "
+        "manter a mesma)",
+    ),
+]
+
+
+async def iniciar_duplicacao(
+    query,
+    context,
+    conta_id,
+):
+    context.user_data.clear()
+    context.user_data["duplicar_conta_id"] = conta_id
+    context.user_data["duplicar_passo"] = 0
+    context.user_data["duplicar_dados"] = {}
+
+    _campo, pergunta = CAMPOS_DUPLICAR[0]
+
+    await query.edit_message_text(
+        f"📄 *DUPLICAR CONTA*\n\n{pergunta}:",
+        reply_markup=InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        "❌ Cancelar",
+                        callback_data=f"conta_{conta_id}",
+                    )
+                ]
+            ]
+        ),
+        parse_mode="Markdown",
+    )
+
+
+async def processar_duplicacao(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    if "duplicar_passo" not in context.user_data:
+        return False
+
+    if not update.message or not update.message.text:
+        return True
+
+    passo = context.user_data["duplicar_passo"]
+    conta_id = context.user_data["duplicar_conta_id"]
+    campo, _pergunta = CAMPOS_DUPLICAR[passo]
+    texto = update.message.text.strip()
+
+    valor = None if texto.lower() == "pular" else texto
+
+    context.user_data["duplicar_dados"][campo] = valor
+
+    proximo_passo = passo + 1
+
+    if proximo_passo < len(CAMPOS_DUPLICAR):
+        context.user_data["duplicar_passo"] = (
+            proximo_passo
+        )
+
+        _campo_prox, pergunta_prox = CAMPOS_DUPLICAR[
+            proximo_passo
+        ]
+
+        await update.message.reply_text(
+            f"{pergunta_prox}:"
+        )
+        return True
+
+    dados = context.user_data["duplicar_dados"]
+
+    novo_id = duplicar_conta(
+        conta_id,
+        novo_email=dados.get("novo_email"),
+        nova_senha=dados.get("nova_senha"),
+    )
+
+    context.user_data.clear()
+
+    if not novo_id:
+        await update.message.reply_text(
+            "❌ Não foi possível duplicar — conta "
+            "original não encontrada."
+        )
+        return True
+
+    await update.message.reply_text(
+        "✅ Conta duplicada!",
+        reply_markup=InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        "📄 Ver cópia",
+                        callback_data=f"conta_{novo_id}",
+                    )
+                ]
+            ]
+        ),
+    )
+
+    return True
 
 
 # =========================================================
@@ -1060,6 +1707,18 @@ async def mostrar_detalhes_conta(
             InlineKeyboardButton(
                 "✏️ EDITAR",
                 callback_data=f"editar_{conta_id}",
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "👥 PERFIS/TELAS",
+                callback_data=f"perfis_{conta_id}",
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "📄 DUPLICAR",
+                callback_data=f"duplicar_{conta_id}",
             )
         ],
         [
@@ -1748,6 +2407,79 @@ async def loop_verificador(
         )
 
 
+async def enviar_backup_semanal(
+    bot,
+):
+    try:
+        resultado = construir_csv_contas()
+
+        if not resultado:
+            return
+
+        buffer_bytes, total = resultado
+
+        await bot.send_document(
+            chat_id=ADMIN_ID,
+            document=buffer_bytes,
+            filename=buffer_bytes.name,
+            caption=(
+                "🗄️ *BACKUP SEMANAL*\n\n"
+                f"📦 {total} conta(s) neste backup."
+            ),
+            parse_mode="Markdown",
+        )
+
+    except Exception as erro:
+        print(
+            "ERRO NO BACKUP SEMANAL:",
+            repr(erro),
+        )
+
+
+async def loop_backup_semanal(
+    application: Application,
+):
+    print(
+        "🗄️ Backup semanal iniciado (segunda "
+        "de manhã)."
+    )
+
+    ultimo_backup_data = None
+
+    while True:
+        try:
+            agora = datetime.now()
+
+            eh_segunda_de_manha = (
+                agora.weekday() == 0
+                and agora.hour == 8
+            )
+
+            ja_fez_hoje = (
+                ultimo_backup_data == agora.date()
+            )
+
+            if eh_segunda_de_manha and not ja_fez_hoje:
+                await enviar_backup_semanal(
+                    application.bot
+                )
+                ultimo_backup_data = agora.date()
+
+        except asyncio.CancelledError:
+            print(
+                "🗄️ Backup semanal encerrado."
+            )
+            raise
+
+        except Exception as erro:
+            print(
+                "ERRO NO LOOP DE BACKUP:",
+                repr(erro),
+            )
+
+        await asyncio.sleep(30 * 60)
+
+
 async def iniciar_verificador(
     application: Application,
 ):
@@ -1787,6 +2519,15 @@ async def iniciar_verificador(
         VERIFICADOR_TASK
     ] = task
 
+    backup_task = asyncio.create_task(
+        loop_backup_semanal(application),
+        name=BACKUP_TASK,
+    )
+
+    application.bot_data[
+        BACKUP_TASK
+    ] = backup_task
+
 
 async def parar_verificador(
     application: Application,
@@ -1800,6 +2541,18 @@ async def parar_verificador(
 
         try:
             await task
+        except asyncio.CancelledError:
+            pass
+
+    backup_task = application.bot_data.get(
+        BACKUP_TASK
+    )
+
+    if backup_task:
+        backup_task.cancel()
+
+        try:
+            await backup_task
         except asyncio.CancelledError:
             pass
 
@@ -1836,6 +2589,24 @@ async def processar_mensagem_texto(
         return
 
     if await processar_config_intervalo(
+        update,
+        context,
+    ):
+        return
+
+    if await processar_duplicacao(
+        update,
+        context,
+    ):
+        return
+
+    if await processar_add_perfil(
+        update,
+        context,
+    ):
+        return
+
+    if await processar_passo_ocupar_perfil(
         update,
         context,
     ):
@@ -2134,10 +2905,231 @@ async def botoes(
         )
         return
 
+    if acao == "vencendo":
+        await mostrar_vencendo(
+            query,
+            context,
+        )
+        return
+
     if acao == "exportar_csv":
         await exportar_contas_csv(
             query,
             context,
+        )
+        return
+
+    if acao.startswith("duplicar_"):
+        try:
+            conta_id = int(
+                acao.replace("duplicar_", "", 1)
+            )
+        except ValueError:
+            await query.answer(
+                "❌ Conta inválida.",
+                show_alert=True,
+            )
+            return
+
+        await iniciar_duplicacao(
+            query,
+            context,
+            conta_id,
+        )
+        return
+
+    if acao.startswith("perfis_"):
+        try:
+            conta_id = int(
+                acao.replace("perfis_", "", 1)
+            )
+        except ValueError:
+            await query.answer(
+                "❌ Conta inválida.",
+                show_alert=True,
+            )
+            return
+
+        await mostrar_perfis_conta(
+            query,
+            context,
+            conta_id,
+        )
+        return
+
+    if acao.startswith("addperfil_"):
+        try:
+            conta_id = int(
+                acao.replace("addperfil_", "", 1)
+            )
+        except ValueError:
+            await query.answer(
+                "❌ Conta inválida.",
+                show_alert=True,
+            )
+            return
+
+        await iniciar_add_perfil(
+            query,
+            context,
+            conta_id,
+        )
+        return
+
+    if acao.startswith("ocuparperfil_"):
+        try:
+            perfil_id = int(
+                acao.replace("ocuparperfil_", "", 1)
+            )
+        except ValueError:
+            await query.answer(
+                "❌ Perfil inválido.",
+                show_alert=True,
+            )
+            return
+
+        await iniciar_ocupar_perfil(
+            query,
+            context,
+            perfil_id,
+        )
+        return
+
+    if acao.startswith("liberarperfil_"):
+        try:
+            perfil_id = int(
+                acao.replace("liberarperfil_", "", 1)
+            )
+        except ValueError:
+            await query.answer(
+                "❌ Perfil inválido.",
+                show_alert=True,
+            )
+            return
+
+        liberar_perfil(perfil_id)
+
+        await query.answer(
+            "✅ Perfil liberado!",
+            show_alert=True,
+        )
+
+        await mostrar_perfil_detalhe(
+            query,
+            context,
+            perfil_id,
+        )
+        return
+
+    if acao.startswith("confirmarexcluirperfil_"):
+        try:
+            perfil_id = int(
+                acao.replace(
+                    "confirmarexcluirperfil_", "", 1
+                )
+            )
+        except ValueError:
+            await query.answer(
+                "❌ Perfil inválido.",
+                show_alert=True,
+            )
+            return
+
+        perfil = buscar_perfil(perfil_id)
+        conta_id = perfil[1] if perfil else None
+
+        excluir_perfil(perfil_id)
+
+        if conta_id:
+            await mostrar_perfis_conta(
+                query,
+                context,
+                conta_id,
+            )
+        else:
+            await query.edit_message_text(
+                "✅ Perfil excluído.",
+                reply_markup=InlineKeyboardMarkup(
+                    [
+                        [
+                            InlineKeyboardButton(
+                                "🏠 Menu",
+                                callback_data="menu",
+                            )
+                        ]
+                    ]
+                ),
+            )
+        return
+
+    if acao.startswith("excluirperfil_"):
+        try:
+            perfil_id = int(
+                acao.replace("excluirperfil_", "", 1)
+            )
+        except ValueError:
+            await query.answer(
+                "❌ Perfil inválido.",
+                show_alert=True,
+            )
+            return
+
+        perfil = buscar_perfil(perfil_id)
+
+        if not perfil:
+            await query.answer(
+                "❌ Perfil não encontrado.",
+                show_alert=True,
+            )
+            return
+
+        nome_perfil = perfil[2]
+
+        await query.edit_message_text(
+            "⚠️ *EXCLUIR PERFIL?*\n\n"
+            f"👤 {nome_perfil}\n\n"
+            "Essa ação não pode ser desfeita.",
+            reply_markup=InlineKeyboardMarkup(
+                [
+                    [
+                        InlineKeyboardButton(
+                            "🗑️ SIM, EXCLUIR",
+                            callback_data=(
+                                "confirmarexcluirperfil_"
+                                f"{perfil_id}"
+                            ),
+                        )
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            "❌ Cancelar",
+                            callback_data=(
+                                f"perfil_{perfil_id}"
+                            ),
+                        )
+                    ],
+                ]
+            ),
+            parse_mode="Markdown",
+        )
+        return
+
+    if acao.startswith("perfil_"):
+        try:
+            perfil_id = int(
+                acao.replace("perfil_", "", 1)
+            )
+        except ValueError:
+            await query.answer(
+                "❌ Perfil inválido.",
+                show_alert=True,
+            )
+            return
+
+        await mostrar_perfil_detalhe(
+            query,
+            context,
+            perfil_id,
         )
         return
 
