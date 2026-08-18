@@ -69,6 +69,27 @@ def criar_tabelas():
     except sqlite3.OperationalError:
         pass
 
+    # -----------------------------------------------------
+    # VENCIMENTO / RENOVAÇÃO
+    # -----------------------------------------------------
+
+    try:
+        cursor.execute("""
+            ALTER TABLE contas
+            ADD COLUMN data_vencimento TEXT
+        """)
+    except sqlite3.OperationalError:
+        pass
+
+    try:
+        cursor.execute("""
+            ALTER TABLE contas
+            ADD COLUMN vencimento_notificado_em
+            TEXT
+        """)
+    except sqlite3.OperationalError:
+        pass
+
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS configuracoes (
             chave TEXT PRIMARY KEY,
@@ -160,6 +181,7 @@ def cadastrar_conta(
     telas_perfis,
     observacoes,
     tags=None,
+    data_vencimento=None,
 ):
 
     conn = conectar()
@@ -176,9 +198,10 @@ def cadastrar_conta(
             fornecedor,
             telas_perfis,
             observacoes,
-            tags
+            tags,
+            data_vencimento
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         servico,
         email,
@@ -189,6 +212,7 @@ def cadastrar_conta(
         telas_perfis,
         observacoes,
         tags,
+        data_vencimento,
     ))
 
     conta_id = cursor.lastrowid
@@ -364,7 +388,9 @@ def buscar_conta(
             criado_em,
             tags,
             ultimo_resultado_verificacao,
-            contagem_problemas
+            contagem_problemas,
+            data_vencimento,
+            vencimento_notificado_em
         FROM contas
         WHERE id = ?
     """, (
@@ -425,6 +451,7 @@ CAMPOS_EDITAVEIS = {
     "telas_perfis": "telas_perfis",
     "observacoes": "observacoes",
     "tags": "tags",
+    "data_vencimento": "data_vencimento",
 }
 
 
@@ -745,3 +772,130 @@ def verificar_todas_pendentes(
         )
 
     return len(pendentes)
+
+
+# =========================================================
+# CATEGORIAS (SERVIÇO)
+# =========================================================
+
+def contar_contas_por_servico():
+    """
+    Retorna, por serviço (categoria), o total de
+    contas cadastradas e quantas estão ativas.
+    Ex: [("Netflix", 5, 4), ("Disney+", 2, 2)]
+    """
+
+    conn = conectar()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT
+            servico,
+            COUNT(*),
+            SUM(CASE WHEN status = 'ativa' THEN 1 ELSE 0 END)
+        FROM contas
+        GROUP BY servico
+        ORDER BY servico
+    """)
+
+    resultados = cursor.fetchall()
+
+    conn.close()
+
+    return resultados
+
+
+# =========================================================
+# VENCIMENTO / RENOVAÇÃO
+# =========================================================
+
+def listar_contas_com_vencimento():
+    """
+    Retorna todas as contas ativas que têm uma
+    data de vencimento cadastrada. O cálculo de
+    quantos dias faltam é feito em Python, já que
+    a data é guardada como texto (DD/MM/AAAA).
+    """
+
+    conn = conectar()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT
+            id,
+            servico,
+            email,
+            data_vencimento,
+            vencimento_notificado_em
+        FROM contas
+        WHERE status = 'ativa'
+        AND data_vencimento IS NOT NULL
+        AND data_vencimento != ''
+    """)
+
+    resultados = cursor.fetchall()
+
+    conn.close()
+
+    return resultados
+
+
+def marcar_vencimento_notificado(
+    conta_id,
+    data_notificacao,
+):
+
+    conn = conectar()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        UPDATE contas
+        SET vencimento_notificado_em = ?
+        WHERE id = ?
+    """, (
+        data_notificacao,
+        conta_id,
+    ))
+
+    conn.commit()
+    conn.close()
+
+
+# =========================================================
+# EXPORTAÇÃO (CSV)
+# =========================================================
+
+def obter_todas_contas_para_exportar():
+    """
+    Retorna todas as contas com todos os campos,
+    prontas pra serem escritas num CSV.
+    """
+
+    conn = conectar()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT
+            id,
+            servico,
+            email,
+            senha,
+            data_criacao,
+            data_vencimento,
+            custo_criacao,
+            fornecedor,
+            telas_perfis,
+            tags,
+            observacoes,
+            status,
+            ultima_verificacao,
+            criado_em
+        FROM contas
+        ORDER BY servico, id
+    """)
+
+    resultados = cursor.fetchall()
+
+    conn.close()
+
+    return resultados
