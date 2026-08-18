@@ -107,6 +107,25 @@ def criar_tabelas():
         )
     """)
 
+    # -----------------------------------------------------
+    # PERFIS/TELAS (COM CLIENTE)
+    # -----------------------------------------------------
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS perfis (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            conta_id INTEGER NOT NULL,
+            nome TEXT NOT NULL,
+            ocupado INTEGER DEFAULT 0,
+            cliente_nome TEXT,
+            cliente_contato TEXT,
+            data_venda TEXT,
+            observacoes TEXT,
+            criado_em TIMESTAMP
+                DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
     conn.commit()
     conn.close()
 
@@ -899,3 +918,262 @@ def obter_todas_contas_para_exportar():
     conn.close()
 
     return resultados
+
+
+# =========================================================
+# PERFIS/TELAS (COM CLIENTE)
+# =========================================================
+
+def cadastrar_perfil(
+    conta_id,
+    nome,
+):
+
+    conn = conectar()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        INSERT INTO perfis
+        (
+            conta_id,
+            nome
+        )
+        VALUES (?, ?)
+    """, (
+        conta_id,
+        nome,
+    ))
+
+    perfil_id = cursor.lastrowid
+
+    conn.commit()
+    conn.close()
+
+    return perfil_id
+
+
+def listar_perfis(
+    conta_id,
+):
+
+    conn = conectar()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT
+            id,
+            nome,
+            ocupado,
+            cliente_nome,
+            cliente_contato,
+            data_venda,
+            observacoes
+        FROM perfis
+        WHERE conta_id = ?
+        ORDER BY id
+    """, (
+        conta_id,
+    ))
+
+    resultados = cursor.fetchall()
+
+    conn.close()
+
+    return resultados
+
+
+def buscar_perfil(
+    perfil_id,
+):
+
+    conn = conectar()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT
+            id,
+            conta_id,
+            nome,
+            ocupado,
+            cliente_nome,
+            cliente_contato,
+            data_venda,
+            observacoes
+        FROM perfis
+        WHERE id = ?
+    """, (
+        perfil_id,
+    ))
+
+    resultado = cursor.fetchone()
+
+    conn.close()
+
+    return resultado
+
+
+def atualizar_perfil(
+    perfil_id,
+    ocupado=None,
+    cliente_nome=None,
+    cliente_contato=None,
+    data_venda=None,
+    observacoes=None,
+):
+    """
+    Atualiza os campos de um perfil. Passar None
+    num campo significa "não alterar" — exceto
+    ocupado, que é sempre definido quando informado
+    como 0 ou 1.
+    """
+
+    conn = conectar()
+    cursor = conn.cursor()
+
+    campos = []
+    valores = []
+
+    if ocupado is not None:
+        campos.append("ocupado = ?")
+        valores.append(ocupado)
+
+    if cliente_nome is not None:
+        campos.append("cliente_nome = ?")
+        valores.append(cliente_nome)
+
+    if cliente_contato is not None:
+        campos.append("cliente_contato = ?")
+        valores.append(cliente_contato)
+
+    if data_venda is not None:
+        campos.append("data_venda = ?")
+        valores.append(data_venda)
+
+    if observacoes is not None:
+        campos.append("observacoes = ?")
+        valores.append(observacoes)
+
+    if not campos:
+        conn.close()
+        return False
+
+    valores.append(perfil_id)
+
+    cursor.execute(
+        f"""
+        UPDATE perfis
+        SET {', '.join(campos)}
+        WHERE id = ?
+        """,
+        valores,
+    )
+
+    alterado = cursor.rowcount > 0
+
+    conn.commit()
+    conn.close()
+
+    return alterado
+
+
+def liberar_perfil(
+    perfil_id,
+):
+
+    conn = conectar()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        UPDATE perfis
+        SET ocupado = 0,
+            cliente_nome = NULL,
+            cliente_contato = NULL,
+            data_venda = NULL,
+            observacoes = NULL
+        WHERE id = ?
+    """, (
+        perfil_id,
+    ))
+
+    alterado = cursor.rowcount > 0
+
+    conn.commit()
+    conn.close()
+
+    return alterado
+
+
+def excluir_perfil(
+    perfil_id,
+):
+
+    conn = conectar()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        DELETE FROM perfis
+        WHERE id = ?
+    """, (
+        perfil_id,
+    ))
+
+    excluido = cursor.rowcount > 0
+
+    conn.commit()
+    conn.close()
+
+    return excluido
+
+
+# =========================================================
+# DUPLICAR CONTA
+# =========================================================
+
+def duplicar_conta(
+    conta_id,
+    novo_email=None,
+    nova_senha=None,
+):
+    """
+    Cria uma nova conta copiando todos os campos
+    de uma existente, exceto email e senha (se
+    novos valores forem informados).
+    """
+
+    original = buscar_conta(conta_id)
+
+    if not original:
+        return None
+
+    (
+        _,
+        servico,
+        email,
+        senha,
+        data_criacao,
+        custo_criacao,
+        fornecedor,
+        telas_perfis,
+        observacoes,
+        _status,
+        _ultima_verificacao,
+        _criado_em,
+        tags,
+        _ultimo_resultado,
+        _contagem_problemas,
+        data_vencimento,
+        _vencimento_notificado_em,
+    ) = original
+
+    return cadastrar_conta(
+        servico=servico,
+        email=novo_email if novo_email else email,
+        senha=nova_senha if nova_senha else senha,
+        data_criacao=data_criacao,
+        custo_criacao=custo_criacao,
+        fornecedor=fornecedor,
+        telas_perfis=telas_perfis,
+        observacoes=observacoes,
+        tags=tags,
+        data_vencimento=data_vencimento,
+    )
