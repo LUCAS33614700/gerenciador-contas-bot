@@ -1,4 +1,7 @@
 import asyncio
+import csv
+import io
+from datetime import datetime, date
 
 from telegram import (
     Update,
@@ -42,6 +45,10 @@ from database import (
     obter_resumo_custos,
     obter_custo_por_servico,
     verificar_todas_pendentes,
+    contar_contas_por_servico,
+    listar_contas_com_vencimento,
+    marcar_vencimento_notificado,
+    obter_todas_contas_para_exportar,
 )
 
 
@@ -52,18 +59,30 @@ from database import (
 INTERVALO_PADRAO_DIAS = 30
 INTERVALO_CHECAGEM_LOOP = 6 * 60 * 60  # a cada 6h
 VERIFICADOR_TASK = "verificador_contas_task"
+DIAS_AVISO_VENCIMENTO = 3
 
 CAMPOS_CADASTRO = [
     ("servico", "📺 Serviço (ex: Netflix, Disney+)"),
     ("email", "📧 Email/login"),
     ("senha", "🔑 Senha"),
     ("data_criacao", "🗓️ Data de criação (ex: 08/08/2026, ou envie \"pular\")"),
+    ("data_vencimento", "⏰ Data de vencimento/renovação (ex: 08/09/2026 — obrigatório)"),
     ("custo_criacao", "💰 Custo de criação (ex: 15.00, ou envie \"pular\")"),
     ("fornecedor", "🏷️ Fornecedor/origem (ou envie \"pular\")"),
     ("telas_perfis", "🖥️ Telas/perfis já usados (ou envie \"pular\")"),
     ("tags", "🏷️ Tags, separadas por vírgula (ex: vip, revisar, ou envie \"pular\")"),
     ("observacoes", "📝 Observações gerais (ou envie \"pular\")"),
 ]
+
+CAMPOS_DATA = ("data_criacao", "data_vencimento")
+
+
+def parse_data_br(texto):
+    """Converte DD/MM/AAAA em date, ou retorna None se inválido."""
+    try:
+        return datetime.strptime(texto, "%d/%m/%Y").date()
+    except ValueError:
+        return None
 
 
 def is_admin(user_id):
@@ -126,6 +145,12 @@ def menu_principal():
             ],
             [
                 InlineKeyboardButton(
+                    "📂 CATEGORIAS",
+                    callback_data="categorias",
+                )
+            ],
+            [
+                InlineKeyboardButton(
                     "🔍 BUSCAR",
                     callback_data="buscar",
                 )
@@ -146,6 +171,12 @@ def menu_principal():
                 InlineKeyboardButton(
                     "⚙️ INTERVALO DE VERIFICAÇÃO",
                     callback_data="config_intervalo",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "📤 EXPORTAR CSV",
+                    callback_data="exportar_csv",
                 )
             ],
         ]
@@ -198,7 +229,22 @@ async def processar_passo_cadastro(
 
     texto = update.message.text.strip()
 
-    if texto.lower() == "pular":
+    if campo == "data_vencimento":
+        if texto.lower() == "pular":
+            await update.message.reply_text(
+                "❌ A data de vencimento é "
+                "obrigatória. Digite no formato "
+                "DD/MM/AAAA (ex: 08/09/2026)."
+            )
+            return True
+        if not parse_data_br(texto):
+            await update.message.reply_text(
+                "❌ Data inválida. Use o formato "
+                "DD/MM/AAAA (ex: 08/09/2026)."
+            )
+            return True
+        valor = texto
+    elif texto.lower() == "pular":
         valor = None
     elif campo == "custo_criacao":
         try:
@@ -209,6 +255,13 @@ async def processar_passo_cadastro(
                 "(ex: 15.00) ou \"pular\"."
             )
             return True
+    elif campo in CAMPOS_DATA and not parse_data_br(texto):
+        await update.message.reply_text(
+            "❌ Data inválida. Use o formato "
+            "DD/MM/AAAA (ex: 08/09/2026) ou "
+            "\"pular\"."
+        )
+        return True
     else:
         valor = texto
 
@@ -250,6 +303,7 @@ async def processar_passo_cadastro(
         telas_perfis=dados.get("telas_perfis"),
         observacoes=dados.get("observacoes"),
         tags=dados.get("tags"),
+        data_vencimento=dados.get("data_vencimento"),
     )
 
     context.user_data.clear()
@@ -578,6 +632,82 @@ async def mostrar_filtro_status(
 
 
 # =========================================================
+# CATEGORIAS (SERVIÇO)
+# =========================================================
+
+async def mostrar_categorias(
+    query,
+    context,
+):
+    categorias = contar_contas_por_servico()
+
+    if not categorias:
+        await query.edit_message_text(
+            "📂 *CATEGORIAS*\n\n"
+            "Nenhuma conta cadastrada ainda.",
+            reply_markup=InlineKeyboardMarkup(
+                [
+                    [
+                        InlineKeyboardButton(
+                            "➕ Nova conta",
+                            callback_data="nova_conta",
+                        )
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            "🏠 Menu",
+                            callback_data="menu",
+                        )
+                    ],
+                ]
+            ),
+            parse_mode="Markdown",
+        )
+        return
+
+    context.user_data["servicos_disponiveis"] = [
+        linha[0] for linha in categorias
+    ]
+
+    botoes = []
+
+    for indice, (servico, total, ativas) in enumerate(
+        categorias
+    ):
+        rotulo = f"📺 {servico} ({ativas}/{total})"
+
+        botoes.append(
+            [
+                InlineKeyboardButton(
+                    rotulo[:60],
+                    callback_data=(
+                        f"setfiltroservico_{indice}"
+                    ),
+                )
+            ]
+        )
+
+    botoes.append(
+        [
+            InlineKeyboardButton(
+                "🏠 Menu",
+                callback_data="menu",
+            )
+        ]
+    )
+
+    await query.edit_message_text(
+        "📂 *CATEGORIAS*\n\n"
+        "Toque numa categoria pra ver só as "
+        "contas dela (ativas/total):",
+        reply_markup=InlineKeyboardMarkup(
+            botoes
+        ),
+        parse_mode="Markdown",
+    )
+
+
+# =========================================================
 # RESUMO DE CUSTOS
 # =========================================================
 
@@ -620,6 +750,69 @@ async def mostrar_resumo_custos(
                     )
                 ]
             ]
+        ),
+        parse_mode="Markdown",
+    )
+
+
+# =========================================================
+# EXPORTAR CSV
+# =========================================================
+
+CABECALHO_EXPORT_CSV = [
+    "id",
+    "servico",
+    "email",
+    "senha",
+    "data_criacao",
+    "data_vencimento",
+    "custo_criacao",
+    "fornecedor",
+    "telas_perfis",
+    "tags",
+    "observacoes",
+    "status",
+    "ultima_verificacao",
+    "criado_em",
+]
+
+
+async def exportar_contas_csv(
+    query,
+    context,
+):
+    contas = obter_todas_contas_para_exportar()
+
+    if not contas:
+        await query.answer(
+            "❌ Nenhuma conta cadastrada ainda.",
+            show_alert=True,
+        )
+        return
+
+    buffer_texto = io.StringIO()
+    escritor = csv.writer(buffer_texto)
+
+    escritor.writerow(CABECALHO_EXPORT_CSV)
+
+    for linha in contas:
+        escritor.writerow(linha)
+
+    buffer_bytes = io.BytesIO(
+        buffer_texto.getvalue().encode("utf-8-sig")
+    )
+    buffer_bytes.name = (
+        f"contas_{date.today().isoformat()}.csv"
+    )
+
+    await query.message.reply_document(
+        document=buffer_bytes,
+        filename=buffer_bytes.name,
+        caption=(
+            "📤 *EXPORTAÇÃO CONCLUÍDA*\n\n"
+            f"📦 {len(contas)} conta(s) exportada(s).\n"
+            "⚠️ Este arquivo contém as senhas em "
+            "texto puro — guarde com cuidado."
         ),
         parse_mode="Markdown",
     )
@@ -771,7 +964,32 @@ async def mostrar_detalhes_conta(
         tags,
         ultimo_resultado,
         contagem_problemas,
+        data_vencimento,
+        _vencimento_notificado_em,
     ) = conta
+
+    texto_vencimento = data_vencimento or "—"
+    data_venc_obj = (
+        parse_data_br(data_vencimento)
+        if data_vencimento
+        else None
+    )
+
+    if data_venc_obj:
+        dias_restantes = (
+            data_venc_obj - date.today()
+        ).days
+
+        if dias_restantes < 0:
+            texto_vencimento += (
+                f" (⚠️ vencida há "
+                f"{abs(dias_restantes)} dia(s))"
+            )
+        elif dias_restantes <= DIAS_AVISO_VENCIMENTO:
+            texto_vencimento += (
+                f" (⏰ faltam {dias_restantes} "
+                f"dia(s))"
+            )
 
     emoji_status = (
         "✅ Ativa" if status == "ativa" else "⚫ Inativa"
@@ -795,6 +1013,7 @@ async def mostrar_detalhes_conta(
         f"📧 Email: {email or '—'}\n"
         f"🔑 Senha: {texto_senha}\n"
         f"🗓️ Criada em: {data_criacao or '—'}\n"
+        f"⏰ Vencimento: {texto_vencimento}\n"
         f"💰 Custo: "
         f"{f'R$ {custo_criacao:.2f}' if custo_criacao else '—'}\n"
         f"🏷️ Fornecedor: {fornecedor or '—'}\n"
@@ -979,6 +1198,7 @@ NOMES_CAMPOS = {
     "email": "Email/login",
     "senha": "Senha",
     "data_criacao": "Data de criação",
+    "data_vencimento": "Data de vencimento",
     "custo_criacao": "Custo de criação",
     "fornecedor": "Fornecedor",
     "telas_perfis": "Telas/perfis",
@@ -1077,8 +1297,28 @@ async def processar_edicao_campo(
                 "(ex: 15.00)."
             )
             return True
+    elif campo == "data_vencimento":
+        if not parse_data_br(texto):
+            await update.message.reply_text(
+                "❌ Data inválida. Use o formato "
+                "DD/MM/AAAA (ex: 08/09/2026)."
+            )
+            return True
+        valor = texto
+    elif campo in CAMPOS_DATA and not parse_data_br(texto):
+        await update.message.reply_text(
+            "❌ Data inválida. Use o formato "
+            "DD/MM/AAAA (ex: 08/09/2026)."
+        )
+        return True
     else:
         valor = texto
+
+    # Ao editar o vencimento manualmente, zera o
+    # controle de notificação pra evitar avisar de
+    # novo antes da hora com a data antiga.
+    if campo == "data_vencimento":
+        marcar_vencimento_notificado(conta_id, "")
 
     atualizar_campo_conta(
         conta_id,
@@ -1360,6 +1600,121 @@ async def checar_contas_pendentes(
         )
 
 
+async def checar_vencimentos_proximos(
+    bot,
+):
+    try:
+        contas = listar_contas_com_vencimento()
+
+        hoje = date.today()
+        hoje_iso = hoje.isoformat()
+
+        pendentes = []
+
+        for (
+            conta_id,
+            servico,
+            email,
+            data_vencimento,
+            notificado_em,
+        ) in contas:
+
+            data_venc_obj = parse_data_br(
+                data_vencimento
+            )
+
+            if not data_venc_obj:
+                continue
+
+            dias_restantes = (
+                data_venc_obj - hoje
+            ).days
+
+            if dias_restantes > DIAS_AVISO_VENCIMENTO:
+                continue
+
+            # já avisado hoje, não repete.
+            if notificado_em == hoje_iso:
+                continue
+
+            pendentes.append(
+                (
+                    conta_id,
+                    servico,
+                    email,
+                    dias_restantes,
+                )
+            )
+
+        if not pendentes:
+            return
+
+        texto = (
+            "⏰ *CONTAS PRA RENOVAR*\n\n"
+        )
+
+        botoes = []
+
+        for (
+            conta_id,
+            servico,
+            email,
+            dias_restantes,
+        ) in pendentes[:15]:
+
+            rotulo = servico
+
+            if email:
+                rotulo += f" ({email[:20]})"
+
+            if dias_restantes < 0:
+                texto += (
+                    f"🔴 {rotulo} — vencida há "
+                    f"{abs(dias_restantes)} dia(s)\n"
+                )
+            elif dias_restantes == 0:
+                texto += (
+                    f"🟠 {rotulo} — vence hoje\n"
+                )
+            else:
+                texto += (
+                    f"🟡 {rotulo} — vence em "
+                    f"{dias_restantes} dia(s)\n"
+                )
+
+            botoes.append(
+                [
+                    InlineKeyboardButton(
+                        f"✏️ Atualizar: {servico[:25]}",
+                        callback_data=(
+                            f"editarcampo_{conta_id}"
+                            f"_data_vencimento"
+                        ),
+                    )
+                ]
+            )
+
+            marcar_vencimento_notificado(
+                conta_id,
+                hoje_iso,
+            )
+
+        await bot.send_message(
+            chat_id=ADMIN_ID,
+            text=texto,
+            reply_markup=InlineKeyboardMarkup(
+                botoes
+            ),
+            parse_mode="Markdown",
+        )
+
+    except Exception as erro:
+        print(
+            "ERRO NO VERIFICADOR DE VENCIMENTOS:",
+            repr(erro),
+        )
+
+
 async def loop_verificador(
     application: Application,
 ):
@@ -1370,6 +1725,9 @@ async def loop_verificador(
     while True:
         try:
             await checar_contas_pendentes(
+                application.bot
+            )
+            await checar_vencimentos_proximos(
                 application.bot
             )
 
@@ -1764,6 +2122,20 @@ async def botoes(
 
     if acao == "buscar":
         await iniciar_busca(
+            query,
+            context,
+        )
+        return
+
+    if acao == "categorias":
+        await mostrar_categorias(
+            query,
+            context,
+        )
+        return
+
+    if acao == "exportar_csv":
+        await exportar_contas_csv(
             query,
             context,
         )
