@@ -1350,6 +1350,72 @@ def excluir_perfil(
 
 
 # =========================================================
+# PRODUTOS AGRUPADOS (VÁRIAS CONTAS DO MESMO SERVIÇO)
+# =========================================================
+
+def listar_produtos_agrupados():
+    """
+    Agrupa as contas por serviço, retornando quantas
+    contas existem no total e quantas estão ativas
+    em cada grupo. Usado pra visão "por produto"
+    (ex: Netflix (2 contas, 1 ativa)).
+    """
+
+    conn = conectar()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT
+            servico,
+            COUNT(*) AS total,
+            SUM(
+                CASE WHEN status = 'ativa'
+                THEN 1 ELSE 0 END
+            ) AS ativas
+        FROM contas
+        GROUP BY servico
+        ORDER BY servico COLLATE NOCASE
+    """)
+
+    resultados = cursor.fetchall()
+
+    conn.close()
+
+    return resultados
+
+
+def renomear_produto(
+    servico_antigo,
+    servico_novo,
+):
+    """
+    Renomeia o "produto" (campo servico) de TODAS
+    as contas que estão com o nome antigo, de uma
+    vez só — não apaga nem duplica nenhuma conta,
+    só troca o rótulo.
+    """
+
+    conn = conectar()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        UPDATE contas
+        SET servico = ?
+        WHERE servico = ?
+    """, (
+        servico_novo,
+        servico_antigo,
+    ))
+
+    alteradas = cursor.rowcount
+
+    conn.commit()
+    conn.close()
+
+    return alteradas
+
+
+# =========================================================
 # DUPLICAR CONTA
 # =========================================================
 
@@ -1387,6 +1453,7 @@ def duplicar_conta(
         _contagem_problemas,
         data_vencimento,
         _vencimento_notificado_em,
+        _data_venda,
     ) = original
 
     return cadastrar_conta(
