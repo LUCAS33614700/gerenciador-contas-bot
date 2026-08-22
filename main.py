@@ -1453,8 +1453,7 @@ async def mostrar_perfil_detalhe(
         botoes.append(
             [
                 InlineKeyboardButton(
-                    "🔴 Marcar ocupado / vincular"
-                    " cliente",
+                    "🛒 Marcar como vendida",
                     callback_data=(
                         f"ocuparperfil_{perfil_id}"
                     ),
@@ -1501,7 +1500,7 @@ async def iniciar_ocupar_perfil(
     campo, pergunta = CAMPOS_OCUPAR_PERFIL[0]
 
     await query.edit_message_text(
-        f"👤 *VINCULAR CLIENTE*\n\n{pergunta}:",
+        f"🛒 *MARCAR COMO VENDIDA*\n\n{pergunta}:",
         reply_markup=InlineKeyboardMarkup(
             [
                 [
