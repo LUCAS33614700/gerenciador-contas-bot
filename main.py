@@ -61,6 +61,8 @@ from database import (
     marcar_vencimento_perfil_notificado,
     existe_conta_igual,
     importar_conta_completa,
+    listar_produtos_agrupados,
+    renomear_produto,
 )
 
 
@@ -466,6 +468,16 @@ async def mostrar_lista_contas(
 
     botoes = [linha_filtro]
 
+    if filtro_servico:
+        botoes.append(
+            [
+                InlineKeyboardButton(
+                    "✏️ Renomear produto",
+                    callback_data="renomearproduto",
+                )
+            ]
+        )
+
     for conta in contas[inicio:fim]:
 
         conta_id, servico, email, status = conta
@@ -570,6 +582,92 @@ async def mostrar_menu_filtro(
         ),
         parse_mode="Markdown",
     )
+
+
+async def iniciar_renomear_produto(
+    query,
+    context,
+):
+    filtro_servico = context.user_data.get(
+        "filtro_servico"
+    )
+
+    if not filtro_servico:
+        await query.answer(
+            "❌ Filtre por um produto primeiro.",
+            show_alert=True,
+        )
+        return
+
+    context.user_data["renomear_produto_de"] = (
+        filtro_servico
+    )
+
+    await query.edit_message_text(
+        "✏️ *RENOMEAR PRODUTO*\n\n"
+        f"Nome atual: {filtro_servico}\n\n"
+        "Digite o novo nome (vale pra todas as "
+        "contas cadastradas com esse nome):",
+        reply_markup=InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        "❌ Cancelar",
+                        callback_data="listar_1",
+                    )
+                ]
+            ]
+        ),
+        parse_mode="Markdown",
+    )
+
+
+async def processar_renomear_produto(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    if "renomear_produto_de" not in context.user_data:
+        return False
+
+    if not update.message or not update.message.text:
+        return True
+
+    nome_antigo = context.user_data[
+        "renomear_produto_de"
+    ]
+    nome_novo = update.message.text.strip()
+
+    if not nome_novo:
+        await update.message.reply_text(
+            "❌ Nome inválido. Digite outro nome."
+        )
+        return True
+
+    alteradas = renomear_produto(
+        nome_antigo,
+        nome_novo,
+    )
+
+    context.user_data.clear()
+    context.user_data["filtro_servico"] = nome_novo
+
+    await update.message.reply_text(
+        f"✅ Produto renomeado!\n\n"
+        f"\"{nome_antigo}\" → \"{nome_novo}\"\n"
+        f"({alteradas} conta(s) atualizada(s))",
+        reply_markup=InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        "📋 Ver contas",
+                        callback_data="listar_1",
+                    )
+                ]
+            ]
+        ),
+    )
+
+    return True
 
 
 async def mostrar_filtro_servico(
@@ -3191,6 +3289,12 @@ async def processar_mensagem_texto(
     ):
         return
 
+    if await processar_renomear_produto(
+        update,
+        context,
+    ):
+        return
+
     if await processar_add_perfil(
         update,
         context,
@@ -3512,6 +3616,13 @@ async def botoes(
 
     if acao == "importar_csv":
         await iniciar_importar_csv(
+            query,
+            context,
+        )
+        return
+
+    if acao == "renomearproduto":
+        await iniciar_renomear_produto(
             query,
             context,
         )
