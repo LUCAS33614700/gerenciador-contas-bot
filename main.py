@@ -225,10 +225,117 @@ async def iniciar_nova_conta(
     context.user_data["cadastro_dados"] = {}
     context.user_data["cadastro_passo"] = 0
 
-    campo, pergunta = CAMPOS_CADASTRO[0]
+    servicos = listar_servicos_distintos()
+
+    if not servicos:
+        await _pedir_novo_servico_cadastro(
+            query,
+            context,
+        )
+        return
+
+    context.user_data["servicos_disponiveis"] = (
+        servicos
+    )
+
+    botoes = []
+
+    for indice, servico in enumerate(servicos):
+        botoes.append(
+            [
+                InlineKeyboardButton(
+                    f"📺 {servico}"[:60],
+                    callback_data=(
+                        f"cadastroservico_{indice}"
+                    ),
+                )
+            ]
+        )
+
+    botoes.append(
+        [
+            InlineKeyboardButton(
+                "➕ Novo serviço",
+                callback_data="cadastroservico_novo",
+            )
+        ]
+    )
+    botoes.append(
+        [
+            InlineKeyboardButton(
+                "❌ CANCELAR",
+                callback_data="cancelar_cadastro",
+            )
+        ]
+    )
 
     await query.edit_message_text(
         "➕ *NOVA CONTA*\n\n"
+        "📺 Escolha o serviço (produto já "
+        "cadastrado) ou toque em \"Novo serviço\":",
+        reply_markup=InlineKeyboardMarkup(
+            botoes
+        ),
+        parse_mode="Markdown",
+    )
+
+
+async def _pedir_novo_servico_cadastro(
+    query,
+    context,
+):
+    context.user_data["cadastro_dados"] = (
+        context.user_data.get("cadastro_dados", {})
+    )
+    context.user_data["cadastro_passo"] = 0
+
+    _, pergunta = CAMPOS_CADASTRO[0]
+
+    await query.edit_message_text(
+        "➕ *NOVA CONTA*\n\n"
+        f"{pergunta}",
+        reply_markup=InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        "❌ CANCELAR",
+                        callback_data="cancelar_cadastro",
+                    )
+                ]
+            ]
+        ),
+        parse_mode="Markdown",
+    )
+
+
+async def selecionar_servico_cadastro(
+    query,
+    context,
+    indice,
+):
+    servicos = context.user_data.get(
+        "servicos_disponiveis"
+    )
+
+    if not servicos or indice >= len(servicos):
+        await query.answer(
+            "❌ Selecione novamente.",
+            show_alert=True,
+        )
+        return
+
+    servico = servicos[indice]
+
+    context.user_data["cadastro_dados"] = {
+        "servico": servico
+    }
+    context.user_data["cadastro_passo"] = 1
+
+    _, pergunta = CAMPOS_CADASTRO[1]
+
+    await query.edit_message_text(
+        f"➕ *NOVA CONTA*\n\n"
+        f"📺 Serviço: {servico}\n\n"
         f"{pergunta}",
         reply_markup=InlineKeyboardMarkup(
             [
@@ -3354,6 +3461,34 @@ async def botoes(
         )
         return
 
+    if acao == "cadastroservico_novo":
+        await _pedir_novo_servico_cadastro(
+            query,
+            context,
+        )
+        return
+
+    if acao.startswith("cadastroservico_"):
+        try:
+            indice = int(
+                acao.replace(
+                    "cadastroservico_", "", 1
+                )
+            )
+        except ValueError:
+            await query.answer(
+                "❌ Seleção inválida.",
+                show_alert=True,
+            )
+            return
+
+        await selecionar_servico_cadastro(
+            query,
+            context,
+            indice,
+        )
+        return
+
     if acao == "cancelar_cadastro":
         context.user_data.clear()
 
@@ -4109,20 +4244,71 @@ async def comando_nova(
     context.user_data["cadastro_dados"] = {}
     context.user_data["cadastro_passo"] = 0
 
-    _, pergunta = CAMPOS_CADASTRO[0]
+    servicos = listar_servicos_distintos()
+
+    if not servicos:
+        _, pergunta = CAMPOS_CADASTRO[0]
+
+        await update.message.reply_text(
+            "➕ *NOVA CONTA*\n\n"
+            f"{pergunta}",
+            reply_markup=InlineKeyboardMarkup(
+                [
+                    [
+                        InlineKeyboardButton(
+                            "❌ CANCELAR",
+                            callback_data=(
+                                "cancelar_cadastro"
+                            ),
+                        )
+                    ]
+                ]
+            ),
+            parse_mode="Markdown",
+        )
+        return
+
+    context.user_data["servicos_disponiveis"] = (
+        servicos
+    )
+
+    botoes = []
+
+    for indice, servico in enumerate(servicos):
+        botoes.append(
+            [
+                InlineKeyboardButton(
+                    f"📺 {servico}"[:60],
+                    callback_data=(
+                        f"cadastroservico_{indice}"
+                    ),
+                )
+            ]
+        )
+
+    botoes.append(
+        [
+            InlineKeyboardButton(
+                "➕ Novo serviço",
+                callback_data="cadastroservico_novo",
+            )
+        ]
+    )
+    botoes.append(
+        [
+            InlineKeyboardButton(
+                "❌ CANCELAR",
+                callback_data="cancelar_cadastro",
+            )
+        ]
+    )
 
     await update.message.reply_text(
         "➕ *NOVA CONTA*\n\n"
-        f"{pergunta}",
+        "📺 Escolha o serviço (produto já "
+        "cadastrado) ou toque em \"Novo serviço\":",
         reply_markup=InlineKeyboardMarkup(
-            [
-                [
-                    InlineKeyboardButton(
-                        "❌ CANCELAR",
-                        callback_data="cancelar_cadastro",
-                    )
-                ]
-            ]
+            botoes
         ),
         parse_mode="Markdown",
     )
