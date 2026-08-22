@@ -1,7 +1,7 @@
 import asyncio
 import csv
 import io
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 
 from telegram import (
     Update,
@@ -48,6 +48,7 @@ from database import (
     contar_contas_por_servico,
     listar_contas_com_vencimento,
     marcar_vencimento_notificado,
+    marcar_conta_vendida,
     obter_todas_contas_para_exportar,
     cadastrar_perfil,
     listar_perfis,
@@ -56,6 +57,10 @@ from database import (
     liberar_perfil,
     excluir_perfil,
     duplicar_conta,
+    listar_perfis_com_vencimento,
+    marcar_vencimento_perfil_notificado,
+    existe_conta_igual,
+    importar_conta_completa,
 )
 
 
@@ -70,6 +75,7 @@ DIAS_AVISO_VENCIMENTO = 3
 JANELA_VENCENDO_DIAS = 7
 BACKUP_TASK = "backup_semanal_task"
 INTERVALO_BACKUP_SEGUNDOS = 7 * 24 * 60 * 60
+DIAS_VENCIMENTO_APOS_VENDA = 30
 
 CAMPOS_CADASTRO = [
     ("servico", "📺 Serviço (ex: Netflix, Disney+)"),
@@ -193,6 +199,12 @@ def menu_principal():
                 InlineKeyboardButton(
                     "📤 EXPORTAR CSV",
                     callback_data="exportar_csv",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "📥 IMPORTAR CSV (backup)",
+                    callback_data="importar_csv",
                 )
             ],
         ]
@@ -767,6 +779,52 @@ def calcular_contas_vencendo(dias_janela):
     return resultado
 
 
+def calcular_perfis_vencendo(dias_janela):
+    """
+    Mesma lógica de calcular_contas_vencendo, mas
+    pra perfis/telas vendidos individualmente.
+    """
+    perfis = listar_perfis_com_vencimento()
+
+    hoje = date.today()
+
+    resultado = []
+
+    for (
+        perfil_id,
+        nome_perfil,
+        conta_id,
+        servico,
+        cliente_nome,
+        data_vencimento,
+        _notificado_em,
+    ) in perfis:
+
+        data_venc_obj = parse_data_br(data_vencimento)
+
+        if not data_venc_obj:
+            continue
+
+        dias_restantes = (data_venc_obj - hoje).days
+
+        if dias_restantes > dias_janela:
+            continue
+
+        resultado.append(
+            (
+                perfil_id,
+                conta_id,
+                f"{servico} — {nome_perfil}",
+                cliente_nome,
+                dias_restantes,
+            )
+        )
+
+    resultado.sort(key=lambda item: item[4])
+
+    return resultado
+
+
 async def mostrar_vencendo(
     query,
     context,
@@ -774,12 +832,16 @@ async def mostrar_vencendo(
     pendentes = calcular_contas_vencendo(
         JANELA_VENCENDO_DIAS
     )
+    perfis_pendentes = calcular_perfis_vencendo(
+        JANELA_VENCENDO_DIAS
+    )
 
-    if not pendentes:
+    if not pendentes and not perfis_pendentes:
         await query.edit_message_text(
             "⏰ *VENCENDO EM BREVE*\n\n"
-            f"Nenhuma conta vence nos próximos "
-            f"{JANELA_VENCENDO_DIAS} dias. 🎉",
+            f"Nenhuma conta ou tela vende nos "
+            f"próximos {JANELA_VENCENDO_DIAS} "
+            f"dias. 🎉",
             reply_markup=InlineKeyboardMarkup(
                 [
                     [
@@ -829,6 +891,42 @@ async def mostrar_vencendo(
                 InlineKeyboardButton(
                     rotulo[:60],
                     callback_data=f"conta_{conta_id}",
+                )
+            ]
+        )
+
+    if perfis_pendentes:
+        texto += "\n👥 *Telas/perfis vendidos:*\n\n"
+
+    for (
+        perfil_id,
+        conta_id,
+        rotulo,
+        cliente_nome,
+        dias_restantes,
+    ) in perfis_pendentes[:20]:
+
+        if cliente_nome:
+            rotulo += f" ({cliente_nome[:20]})"
+
+        if dias_restantes < 0:
+            texto += (
+                f"🔴 {rotulo} — vencida há "
+                f"{abs(dias_restantes)} dia(s)\n"
+            )
+        elif dias_restantes == 0:
+            texto += f"🟠 {rotulo} — vence hoje\n"
+        else:
+            texto += (
+                f"🟡 {rotulo} — vence em "
+                f"{dias_restantes} dia(s)\n"
+            )
+
+        botoes.append(
+            [
+                InlineKeyboardButton(
+                    rotulo[:60],
+                    callback_data=f"perfil_{perfil_id}",
                 )
             ]
         )
@@ -918,6 +1016,7 @@ CABECALHO_EXPORT_CSV = [
     "status",
     "ultima_verificacao",
     "criado_em",
+    "data_venda",
 ]
 
 
@@ -977,6 +1076,191 @@ async def exportar_contas_csv(
     )
 
 
+async def iniciar_importar_csv(
+    query,
+    context,
+):
+    context.user_data.clear()
+    context.user_data["aguardando_csv_import"] = True
+
+    await query.edit_message_text(
+        "📥 *IMPORTAR CSV (BACKUP)*\n\n"
+        "Envie aqui o arquivo .csv exportado "
+        "anteriormente por este bot.\n\n"
+        "✅ Contas já cadastradas (mesmo serviço "
+        "+ email) são identificadas e puladas — "
+        "não duplica nada.\n"
+        "✅ Nenhuma conta existente é apagada ou "
+        "sobrescrita.",
+        reply_markup=InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        "❌ Cancelar",
+                        callback_data="menu",
+                    )
+                ]
+            ]
+        ),
+        parse_mode="Markdown",
+    )
+
+
+def _texto_ou_none(valor):
+    if valor is None:
+        return None
+    valor = valor.strip()
+    return valor if valor else None
+
+
+def _numero_ou_none(valor):
+    valor = _texto_ou_none(valor)
+    if valor is None:
+        return None
+    try:
+        return float(valor.replace(",", "."))
+    except ValueError:
+        return None
+
+
+async def processar_documento_csv(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    if not context.user_data.get(
+        "aguardando_csv_import"
+    ):
+        return False
+
+    usuario = update.effective_user
+
+    if not usuario or not is_admin(usuario.id):
+        return False
+
+    documento = (
+        update.message.document
+        if update.message
+        else None
+    )
+
+    if not documento:
+        return True
+
+    nome_arquivo = documento.file_name or ""
+
+    if not nome_arquivo.lower().endswith(".csv"):
+        await update.message.reply_text(
+            "❌ Envie um arquivo .csv (o mesmo "
+            "gerado pela opção EXPORTAR CSV)."
+        )
+        return True
+
+    arquivo = await documento.get_file()
+    conteudo_bytes = await arquivo.download_as_bytearray()
+
+    try:
+        texto = bytes(conteudo_bytes).decode(
+            "utf-8-sig"
+        )
+    except UnicodeDecodeError:
+        await update.message.reply_text(
+            "❌ Não consegui ler o arquivo. "
+            "Certifique-se de enviar o CSV "
+            "original, sem editar."
+        )
+        return True
+
+    leitor = csv.DictReader(io.StringIO(texto))
+
+    importadas = 0
+    puladas = 0
+    erros = 0
+
+    for linha in leitor:
+        servico = _texto_ou_none(
+            linha.get("servico")
+        )
+
+        if not servico:
+            erros += 1
+            continue
+
+        email = _texto_ou_none(linha.get("email"))
+
+        if existe_conta_igual(servico, email):
+            puladas += 1
+            continue
+
+        dados = {
+            "servico": servico,
+            "email": email,
+            "senha": _texto_ou_none(
+                linha.get("senha")
+            ),
+            "data_criacao": _texto_ou_none(
+                linha.get("data_criacao")
+            ),
+            "data_vencimento": _texto_ou_none(
+                linha.get("data_vencimento")
+            ),
+            "custo_criacao": _numero_ou_none(
+                linha.get("custo_criacao")
+            ),
+            "fornecedor": _texto_ou_none(
+                linha.get("fornecedor")
+            ),
+            "telas_perfis": _texto_ou_none(
+                linha.get("telas_perfis")
+            ),
+            "tags": _texto_ou_none(
+                linha.get("tags")
+            ),
+            "observacoes": _texto_ou_none(
+                linha.get("observacoes")
+            ),
+            "status": _texto_ou_none(
+                linha.get("status")
+            ) or "ativa",
+            "data_venda": _texto_ou_none(
+                linha.get("data_venda")
+            ),
+        }
+
+        importar_conta_completa(dados)
+        importadas += 1
+
+    context.user_data.clear()
+
+    resumo = (
+        "✅ *IMPORTAÇÃO CONCLUÍDA!*\n\n"
+        f"📦 {importadas} conta(s) importada(s)\n"
+        f"⏭️ {puladas} já existiam (puladas)\n"
+    )
+
+    if erros:
+        resumo += (
+            f"⚠️ {erros} linha(s) ignorada(s) "
+            f"(sem serviço preenchido)\n"
+        )
+
+    await update.message.reply_text(
+        resumo,
+        reply_markup=InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        "📋 Ver contas",
+                        callback_data="listar_1",
+                    )
+                ]
+            ]
+        ),
+        parse_mode="Markdown",
+    )
+
+    return True
+
+
 # =========================================================
 # PERFIS/TELAS (COM CLIENTE)
 # =========================================================
@@ -990,8 +1274,8 @@ CAMPOS_OCUPAR_PERFIL = [
     ),
     (
         "data_venda",
-        "🗓️ Data da venda (DD/MM/AAAA, ou envie "
-        "\"pular\")",
+        "🗓️ Data da venda (DD/MM/AAAA, envie "
+        "\"hoje\", ou \"pular\")",
     ),
     (
         "observacoes",
@@ -1032,10 +1316,27 @@ async def mostrar_perfis_conta(
             _cliente_contato,
             _data_venda,
             _observacoes,
+            data_vencimento,
         ) in perfis:
 
             if ocupado:
                 rotulo = f"🔴 {nome} — {cliente_nome or '?'}"
+
+                venc_obj = (
+                    parse_data_br(data_vencimento)
+                    if data_vencimento
+                    else None
+                )
+
+                if venc_obj:
+                    dias_rest = (
+                        venc_obj - date.today()
+                    ).days
+
+                    if dias_rest < 0:
+                        rotulo += " ⚠️"
+                    elif dias_rest <= DIAS_AVISO_VENCIMENTO:
+                        rotulo += " ⏰"
             else:
                 rotulo = f"🟢 {nome} — livre"
 
@@ -1097,6 +1398,8 @@ async def mostrar_perfil_detalhe(
         cliente_contato,
         data_venda,
         observacoes,
+        data_vencimento,
+        _vencimento_notificado_em,
     ) = perfil
 
     texto = f"👤 *{nome}*\n\n"
@@ -1104,11 +1407,35 @@ async def mostrar_perfil_detalhe(
     botoes = []
 
     if ocupado:
+        texto_vencimento = data_vencimento or "—"
+        venc_obj = (
+            parse_data_br(data_vencimento)
+            if data_vencimento
+            else None
+        )
+
+        if venc_obj:
+            dias_rest = (
+                venc_obj - date.today()
+            ).days
+
+            if dias_rest < 0:
+                texto_vencimento += (
+                    f" (⚠️ vencido há "
+                    f"{abs(dias_rest)} dia(s))"
+                )
+            elif dias_rest <= DIAS_AVISO_VENCIMENTO:
+                texto_vencimento += (
+                    f" (⏰ faltam {dias_rest} "
+                    f"dia(s))"
+                )
+
         texto += (
             f"Status: 🔴 Ocupado\n"
             f"🙍 Cliente: {cliente_nome or '—'}\n"
             f"📞 Contato: {cliente_contato or '—'}\n"
             f"🗓️ Venda: {data_venda or '—'}\n"
+            f"⏰ Vencimento: {texto_vencimento}\n"
             f"📝 Obs: {observacoes or '—'}\n"
         )
         botoes.append(
@@ -1216,10 +1543,13 @@ async def processar_passo_ocupar_perfil(
     elif campo == "data_venda":
         if texto.lower() == "pular":
             valor = ""
+        elif texto.lower() == "hoje":
+            valor = date.today().strftime("%d/%m/%Y")
         elif not parse_data_br(texto):
             await update.message.reply_text(
                 "❌ Data inválida. Use o formato "
-                "DD/MM/AAAA ou envie \"pular\"."
+                "DD/MM/AAAA, envie \"hoje\" ou "
+                "\"pular\"."
             )
             return True
         else:
@@ -1245,6 +1575,21 @@ async def processar_passo_ocupar_perfil(
 
     dados = context.user_data["ocupar_dados"]
 
+    data_venda_valor = dados.get("data_venda", "")
+    data_venc_valor = ""
+
+    data_venda_obj = (
+        parse_data_br(data_venda_valor)
+        if data_venda_valor
+        else None
+    )
+
+    if data_venda_obj:
+        data_venc_valor = (
+            data_venda_obj
+            + timedelta(days=DIAS_VENCIMENTO_APOS_VENDA)
+        ).strftime("%d/%m/%Y")
+
     atualizar_perfil(
         perfil_id,
         ocupado=1,
@@ -1252,14 +1597,23 @@ async def processar_passo_ocupar_perfil(
         cliente_contato=dados.get(
             "cliente_contato", ""
         ),
-        data_venda=dados.get("data_venda", ""),
+        data_venda=data_venda_valor,
         observacoes=dados.get("observacoes", ""),
+        data_vencimento=data_venc_valor,
     )
 
     context.user_data.clear()
 
+    aviso_vencimento = (
+        f"⏰ Vencimento automático: {data_venc_valor} "
+        f"({DIAS_VENCIMENTO_APOS_VENDA} dias)\n"
+        if data_venc_valor
+        else ""
+    )
+
     await update.message.reply_text(
-        "✅ Perfil vinculado ao cliente!",
+        f"✅ Perfil vinculado ao cliente!\n"
+        f"{aviso_vencimento}",
         reply_markup=InlineKeyboardMarkup(
             [
                 [
@@ -1462,6 +1816,105 @@ async def processar_duplicacao(
         ),
     )
 
+# =========================================================
+# MARCAR CONTA COMO VENDIDA
+# =========================================================
+
+async def iniciar_venda_conta(
+    query,
+    context,
+    conta_id,
+):
+    context.user_data.clear()
+    context.user_data["vender_conta_id"] = conta_id
+
+    await query.edit_message_text(
+        "🛒 *MARCAR COMO VENDIDA*\n\n"
+        "🗓️ Data da venda (DD/MM/AAAA, ou envie "
+        "\"hoje\"):\n\n"
+        f"O vencimento será calculado automaticamente "
+        f"pra {DIAS_VENCIMENTO_APOS_VENDA} dias depois "
+        f"da venda.",
+        reply_markup=InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        "❌ Cancelar",
+                        callback_data=f"conta_{conta_id}",
+                    )
+                ]
+            ]
+        ),
+        parse_mode="Markdown",
+    )
+
+
+async def processar_venda_conta(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    if "vender_conta_id" not in context.user_data:
+        return False
+
+    if not update.message or not update.message.text:
+        return True
+
+    conta_id = context.user_data["vender_conta_id"]
+    texto = update.message.text.strip()
+
+    if texto.lower() == "hoje":
+        data_venda_obj = date.today()
+    else:
+        data_venda_obj = parse_data_br(texto)
+
+    if not data_venda_obj:
+        await update.message.reply_text(
+            "❌ Data inválida. Use o formato "
+            "DD/MM/AAAA ou envie \"hoje\"."
+        )
+        return True
+
+    data_venda_txt = data_venda_obj.strftime(
+        "%d/%m/%Y"
+    )
+    data_vencimento_txt = (
+        data_venda_obj
+        + timedelta(days=DIAS_VENCIMENTO_APOS_VENDA)
+    ).strftime("%d/%m/%Y")
+
+    alterado = marcar_conta_vendida(
+        conta_id,
+        data_venda_txt,
+        data_vencimento_txt,
+    )
+
+    context.user_data.clear()
+
+    if not alterado:
+        await update.message.reply_text(
+            "❌ Não foi possível marcar como vendida "
+            "— conta não encontrada."
+        )
+        return True
+
+    await update.message.reply_text(
+        f"✅ Venda registrada em {data_venda_txt}!\n"
+        f"⏰ Vencimento automático: "
+        f"{data_vencimento_txt} "
+        f"({DIAS_VENCIMENTO_APOS_VENDA} dias)\n\n"
+        f"Nenhum outro dado da conta foi alterado.",
+        reply_markup=InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        "📦 Ver conta",
+                        callback_data=f"conta_{conta_id}",
+                    )
+                ]
+            ]
+        ),
+    )
+
     return True
 
 
@@ -1613,6 +2066,7 @@ async def mostrar_detalhes_conta(
         contagem_problemas,
         data_vencimento,
         _vencimento_notificado_em,
+        data_venda,
     ) = conta
 
     texto_vencimento = data_vencimento or "—"
@@ -1660,6 +2114,7 @@ async def mostrar_detalhes_conta(
         f"📧 Email: {email or '—'}\n"
         f"🔑 Senha: {texto_senha}\n"
         f"🗓️ Criada em: {data_criacao or '—'}\n"
+        f"🛒 Vendida em: {data_venda or '—'}\n"
         f"⏰ Vencimento: {texto_vencimento}\n"
         f"💰 Custo: "
         f"{f'R$ {custo_criacao:.2f}' if custo_criacao else '—'}\n"
@@ -1719,6 +2174,12 @@ async def mostrar_detalhes_conta(
             InlineKeyboardButton(
                 "📄 DUPLICAR",
                 callback_data=f"duplicar_{conta_id}",
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "🛒 MARCAR COMO VENDIDA",
+                callback_data=f"vender_{conta_id}",
             )
         ],
         [
@@ -2262,6 +2723,13 @@ async def checar_contas_pendentes(
 async def checar_vencimentos_proximos(
     bot,
 ):
+    await _checar_vencimentos_contas(bot)
+    await _checar_vencimentos_perfis(bot)
+
+
+async def _checar_vencimentos_contas(
+    bot,
+):
     try:
         contas = listar_contas_com_vencimento()
 
@@ -2370,6 +2838,124 @@ async def checar_vencimentos_proximos(
     except Exception as erro:
         print(
             "ERRO NO VERIFICADOR DE VENCIMENTOS:",
+            repr(erro),
+        )
+
+
+async def _checar_vencimentos_perfis(
+    bot,
+):
+    try:
+        perfis = listar_perfis_com_vencimento()
+
+        hoje = date.today()
+        hoje_iso = hoje.isoformat()
+
+        pendentes_perfis = []
+
+        for (
+            perfil_id,
+            nome_perfil,
+            conta_id,
+            servico,
+            cliente_nome,
+            data_vencimento,
+            notificado_em,
+        ) in perfis:
+
+            data_venc_obj = parse_data_br(
+                data_vencimento
+            )
+
+            if not data_venc_obj:
+                continue
+
+            dias_restantes = (
+                data_venc_obj - hoje
+            ).days
+
+            if dias_restantes > DIAS_AVISO_VENCIMENTO:
+                continue
+
+            if notificado_em == hoje_iso:
+                continue
+
+            pendentes_perfis.append(
+                (
+                    perfil_id,
+                    servico,
+                    nome_perfil,
+                    cliente_nome,
+                    dias_restantes,
+                )
+            )
+
+        if not pendentes_perfis:
+            return
+
+        texto_perfis = (
+            "⏰ *TELAS/PERFIS PRA RENOVAR*\n\n"
+        )
+
+        botoes_perfis = []
+
+        for (
+            perfil_id,
+            servico,
+            nome_perfil,
+            cliente_nome,
+            dias_restantes,
+        ) in pendentes_perfis[:15]:
+
+            rotulo = f"{servico} — {nome_perfil}"
+
+            if cliente_nome:
+                rotulo += f" ({cliente_nome[:20]})"
+
+            if dias_restantes < 0:
+                texto_perfis += (
+                    f"🔴 {rotulo} — vencida há "
+                    f"{abs(dias_restantes)} dia(s)\n"
+                )
+            elif dias_restantes == 0:
+                texto_perfis += (
+                    f"🟠 {rotulo} — vence hoje\n"
+                )
+            else:
+                texto_perfis += (
+                    f"🟡 {rotulo} — vence em "
+                    f"{dias_restantes} dia(s)\n"
+                )
+
+            botoes_perfis.append(
+                [
+                    InlineKeyboardButton(
+                        f"👤 Ver: {nome_perfil[:25]}",
+                        callback_data=(
+                            f"perfil_{perfil_id}"
+                        ),
+                    )
+                ]
+            )
+
+            marcar_vencimento_perfil_notificado(
+                perfil_id,
+                hoje_iso,
+            )
+
+        await bot.send_message(
+            chat_id=ADMIN_ID,
+            text=texto_perfis,
+            reply_markup=InlineKeyboardMarkup(
+                botoes_perfis
+            ),
+            parse_mode="Markdown",
+        )
+
+    except Exception as erro:
+        print(
+            "ERRO NO VERIFICADOR DE VENCIMENTOS "
+            "DE PERFIS:",
             repr(erro),
         )
 
@@ -2595,6 +3181,12 @@ async def processar_mensagem_texto(
         return
 
     if await processar_duplicacao(
+        update,
+        context,
+    ):
+        return
+
+    if await processar_venda_conta(
         update,
         context,
     ):
@@ -2919,6 +3511,13 @@ async def botoes(
         )
         return
 
+    if acao == "importar_csv":
+        await iniciar_importar_csv(
+            query,
+            context,
+        )
+        return
+
     if acao.startswith("duplicar_"):
         try:
             conta_id = int(
@@ -2932,6 +3531,25 @@ async def botoes(
             return
 
         await iniciar_duplicacao(
+            query,
+            context,
+            conta_id,
+        )
+        return
+
+    if acao.startswith("vender_"):
+        try:
+            conta_id = int(
+                acao.replace("vender_", "", 1)
+            )
+        except ValueError:
+            await query.answer(
+                "❌ Conta inválida.",
+                show_alert=True,
+            )
+            return
+
+        await iniciar_venda_conta(
             query,
             context,
             conta_id,
@@ -3546,6 +4164,13 @@ def main():
     application.add_handler(
         CallbackQueryHandler(
             botoes
+        )
+    )
+
+    application.add_handler(
+        MessageHandler(
+            filters.Document.ALL,
+            processar_documento_csv,
         )
     )
 
