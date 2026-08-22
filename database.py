@@ -102,6 +102,14 @@ def criar_tabelas():
     except sqlite3.OperationalError:
         pass
 
+    try:
+        cursor.execute("""
+            ALTER TABLE contas
+            ADD COLUMN comprador TEXT
+        """)
+    except sqlite3.OperationalError:
+        pass
+
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS configuracoes (
             chave TEXT PRIMARY KEY,
@@ -289,7 +297,8 @@ def listar_contas(
                 id,
                 servico,
                 email,
-                status
+                status,
+                data_venda
             FROM contas
             WHERE status = 'ativa'
             ORDER BY servico, id
@@ -302,7 +311,8 @@ def listar_contas(
                 id,
                 servico,
                 email,
-                status
+                status,
+                data_venda
             FROM contas
             ORDER BY servico, id
         """)
@@ -327,7 +337,10 @@ def listar_contas_filtrado(
     parametros = []
 
     if servico:
-        condicoes.append("servico = ?")
+        condicoes.append(
+            "UPPER(TRIM(servico)) = "
+            "UPPER(TRIM(?))"
+        )
         parametros.append(servico)
 
     if status:
@@ -352,7 +365,8 @@ def listar_contas_filtrado(
             id,
             servico,
             email,
-            status
+            status,
+            data_venda
         FROM contas
         {where}
         ORDER BY servico, id
@@ -443,7 +457,8 @@ def buscar_conta(
             contagem_problemas,
             data_vencimento,
             vencimento_notificado_em,
-            data_venda
+            data_venda,
+            comprador
         FROM contas
         WHERE id = ?
     """, (
@@ -847,8 +862,8 @@ def contar_contas_por_servico():
             COUNT(*),
             SUM(CASE WHEN status = 'ativa' THEN 1 ELSE 0 END)
         FROM contas
-        GROUP BY servico
-        ORDER BY servico
+        GROUP BY UPPER(TRIM(servico))
+        ORDER BY servico COLLATE NOCASE
     """)
 
     resultados = cursor.fetchall()
@@ -918,6 +933,7 @@ def marcar_conta_vendida(
     conta_id,
     data_venda,
     data_vencimento,
+    comprador=None,
 ):
     """
     Registra a data em que a conta (inteira) foi
@@ -925,22 +941,38 @@ def marcar_conta_vendida(
     (normalmente venda + 30 dias), sem apagar
     nenhum outro dado da conta. Zera o aviso de
     vencimento já enviado, pra recontar o prazo.
+    Comprador é opcional.
     """
 
     conn = conectar()
     cursor = conn.cursor()
 
-    cursor.execute("""
-        UPDATE contas
-        SET data_venda = ?,
-            data_vencimento = ?,
-            vencimento_notificado_em = NULL
-        WHERE id = ?
-    """, (
-        data_venda,
-        data_vencimento,
-        conta_id,
-    ))
+    if comprador is not None:
+        cursor.execute("""
+            UPDATE contas
+            SET data_venda = ?,
+                data_vencimento = ?,
+                vencimento_notificado_em = NULL,
+                comprador = ?
+            WHERE id = ?
+        """, (
+            data_venda,
+            data_vencimento,
+            comprador,
+            conta_id,
+        ))
+    else:
+        cursor.execute("""
+            UPDATE contas
+            SET data_venda = ?,
+                data_vencimento = ?,
+                vencimento_notificado_em = NULL
+            WHERE id = ?
+        """, (
+            data_venda,
+            data_vencimento,
+            conta_id,
+        ))
 
     alterado = cursor.rowcount > 0
 
@@ -1373,7 +1405,7 @@ def listar_produtos_agrupados():
                 THEN 1 ELSE 0 END
             ) AS ativas
         FROM contas
-        GROUP BY servico
+        GROUP BY UPPER(TRIM(servico))
         ORDER BY servico COLLATE NOCASE
     """)
 
@@ -1401,7 +1433,8 @@ def renomear_produto(
     cursor.execute("""
         UPDATE contas
         SET servico = ?
-        WHERE servico = ?
+        WHERE UPPER(TRIM(servico)) =
+            UPPER(TRIM(?))
     """, (
         servico_novo,
         servico_antigo,
@@ -1454,6 +1487,7 @@ def duplicar_conta(
         data_vencimento,
         _vencimento_notificado_em,
         _data_venda,
+        _comprador,
     ) = original
 
     return cadastrar_conta(
