@@ -90,6 +90,18 @@ def criar_tabelas():
     except sqlite3.OperationalError:
         pass
 
+    # -----------------------------------------------------
+    # DATA DA VENDA (CONTA INTEIRA)
+    # -----------------------------------------------------
+
+    try:
+        cursor.execute("""
+            ALTER TABLE contas
+            ADD COLUMN data_venda TEXT
+        """)
+    except sqlite3.OperationalError:
+        pass
+
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS configuracoes (
             chave TEXT PRIMARY KEY,
@@ -125,6 +137,27 @@ def criar_tabelas():
                 DEFAULT CURRENT_TIMESTAMP
         )
     """)
+
+    # -----------------------------------------------------
+    # VENCIMENTO AUTOMÁTICO DO PERFIL (30 DIAS APÓS VENDA)
+    # -----------------------------------------------------
+
+    try:
+        cursor.execute("""
+            ALTER TABLE perfis
+            ADD COLUMN data_vencimento TEXT
+        """)
+    except sqlite3.OperationalError:
+        pass
+
+    try:
+        cursor.execute("""
+            ALTER TABLE perfis
+            ADD COLUMN vencimento_notificado_em
+            TEXT
+        """)
+    except sqlite3.OperationalError:
+        pass
 
     conn.commit()
     conn.close()
@@ -409,7 +442,8 @@ def buscar_conta(
             ultimo_resultado_verificacao,
             contagem_problemas,
             data_vencimento,
-            vencimento_notificado_em
+            vencimento_notificado_em,
+            data_venda
         FROM contas
         WHERE id = ?
     """, (
@@ -880,6 +914,96 @@ def marcar_vencimento_notificado(
     conn.close()
 
 
+def marcar_conta_vendida(
+    conta_id,
+    data_venda,
+    data_vencimento,
+):
+    """
+    Registra a data em que a conta (inteira) foi
+    vendida e já define o vencimento automático
+    (normalmente venda + 30 dias), sem apagar
+    nenhum outro dado da conta. Zera o aviso de
+    vencimento já enviado, pra recontar o prazo.
+    """
+
+    conn = conectar()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        UPDATE contas
+        SET data_venda = ?,
+            data_vencimento = ?,
+            vencimento_notificado_em = NULL
+        WHERE id = ?
+    """, (
+        data_venda,
+        data_vencimento,
+        conta_id,
+    ))
+
+    alterado = cursor.rowcount > 0
+
+    conn.commit()
+    conn.close()
+
+    return alterado
+
+
+def listar_perfis_com_vencimento():
+    """
+    Retorna todos os perfis/telas ocupados (vendidos)
+    que têm vencimento automático calculado, junto
+    com o serviço da conta a que pertencem.
+    """
+
+    conn = conectar()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT
+            perfis.id,
+            perfis.nome,
+            perfis.conta_id,
+            contas.servico,
+            perfis.cliente_nome,
+            perfis.data_vencimento,
+            perfis.vencimento_notificado_em
+        FROM perfis
+        JOIN contas ON contas.id = perfis.conta_id
+        WHERE perfis.ocupado = 1
+        AND perfis.data_vencimento IS NOT NULL
+        AND perfis.data_vencimento != ''
+    """)
+
+    resultados = cursor.fetchall()
+
+    conn.close()
+
+    return resultados
+
+
+def marcar_vencimento_perfil_notificado(
+    perfil_id,
+    data_notificacao,
+):
+
+    conn = conectar()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        UPDATE perfis
+        SET vencimento_notificado_em = ?
+        WHERE id = ?
+    """, (
+        data_notificacao,
+        perfil_id,
+    ))
+
+    conn.commit()
+    conn.close()
+
+
 # =========================================================
 # EXPORTAÇÃO (CSV)
 # =========================================================
@@ -908,7 +1032,8 @@ def obter_todas_contas_para_exportar():
             observacoes,
             status,
             ultima_verificacao,
-            criado_em
+            criado_em,
+            data_venda
         FROM contas
         ORDER BY servico, id
     """)
@@ -918,6 +1043,94 @@ def obter_todas_contas_para_exportar():
     conn.close()
 
     return resultados
+
+
+# =========================================================
+# IMPORTAÇÃO (CSV DE BACKUP)
+# =========================================================
+
+def existe_conta_igual(
+    servico,
+    email,
+):
+    """
+    Checagem simples de duplicidade pra importação
+    de CSV: considera "igual" quando serviço e email
+    batem exatamente.
+    """
+
+    conn = conectar()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT id
+        FROM contas
+        WHERE servico = ?
+        AND IFNULL(email, '') = IFNULL(?, '')
+        LIMIT 1
+    """, (
+        servico,
+        email,
+    ))
+
+    resultado = cursor.fetchone()
+
+    conn.close()
+
+    return resultado[0] if resultado else None
+
+
+def importar_conta_completa(dados):
+    """
+    Insere uma conta a partir de um CSV de backup,
+    preservando status, vencimento e data de venda
+    (diferente de cadastrar_conta, feita pro fluxo
+    manual de cadastro). Não recebe nem sobrescreve
+    nenhuma conta já existente — sempre cria uma
+    linha nova.
+    """
+
+    conn = conectar()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        INSERT INTO contas
+        (
+            servico,
+            email,
+            senha,
+            data_criacao,
+            custo_criacao,
+            fornecedor,
+            telas_perfis,
+            observacoes,
+            tags,
+            data_vencimento,
+            status,
+            data_venda
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        dados.get("servico"),
+        dados.get("email"),
+        dados.get("senha"),
+        dados.get("data_criacao"),
+        dados.get("custo_criacao") or None,
+        dados.get("fornecedor"),
+        dados.get("telas_perfis"),
+        dados.get("observacoes"),
+        dados.get("tags"),
+        dados.get("data_vencimento"),
+        dados.get("status") or "ativa",
+        dados.get("data_venda"),
+    ))
+
+    novo_id = cursor.lastrowid
+
+    conn.commit()
+    conn.close()
+
+    return novo_id
 
 
 # =========================================================
@@ -967,7 +1180,8 @@ def listar_perfis(
             cliente_nome,
             cliente_contato,
             data_venda,
-            observacoes
+            observacoes,
+            data_vencimento
         FROM perfis
         WHERE conta_id = ?
         ORDER BY id
@@ -998,7 +1212,9 @@ def buscar_perfil(
             cliente_nome,
             cliente_contato,
             data_venda,
-            observacoes
+            observacoes,
+            data_vencimento,
+            vencimento_notificado_em
         FROM perfis
         WHERE id = ?
     """, (
@@ -1019,6 +1235,7 @@ def atualizar_perfil(
     cliente_contato=None,
     data_venda=None,
     observacoes=None,
+    data_vencimento=None,
 ):
     """
     Atualiza os campos de um perfil. Passar None
@@ -1052,6 +1269,11 @@ def atualizar_perfil(
     if observacoes is not None:
         campos.append("observacoes = ?")
         valores.append(observacoes)
+
+    if data_vencimento is not None:
+        campos.append("data_vencimento = ?")
+        valores.append(data_vencimento)
+        campos.append("vencimento_notificado_em = NULL")
 
     if not campos:
         conn.close()
@@ -1089,7 +1311,9 @@ def liberar_perfil(
             cliente_nome = NULL,
             cliente_contato = NULL,
             data_venda = NULL,
-            observacoes = NULL
+            observacoes = NULL,
+            data_vencimento = NULL,
+            vencimento_notificado_em = NULL
         WHERE id = ?
     """, (
         perfil_id,
