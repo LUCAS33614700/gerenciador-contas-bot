@@ -587,15 +587,22 @@ async def mostrar_lista_contas(
 
     for conta in contas[inicio:fim]:
 
-        conta_id, servico, email, status = conta
-
-        emoji_status = (
-            "✅" if status == "ativa" else "⚫"
+        conta_id, servico, email, status, data_venda = (
+            conta
         )
+
+        if data_venda:
+            emoji_status = "🛒"
+        elif status == "ativa":
+            emoji_status = "✅"
+        else:
+            emoji_status = "⚫"
 
         rotulo = f"{emoji_status} {servico}"
 
-        if email:
+        if data_venda:
+            rotulo += f" (vendida {data_venda})"
+        elif email:
             rotulo += f" ({email[:20]})"
 
         botoes.append(
@@ -640,7 +647,8 @@ async def mostrar_lista_contas(
     await query.edit_message_text(
         "📋 *LISTAR CONTAS*\n\n"
         f"Página {pagina}/{total_paginas} — "
-        f"{len(contas)} conta(s):",
+        f"{len(contas)} conta(s) "
+        f"(🛒 = vendida):",
         reply_markup=InlineKeyboardMarkup(
             botoes
         ),
@@ -2057,9 +2065,27 @@ async def processar_venda_conta(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
-    if "vender_conta_id" not in context.user_data:
-        return False
+    if "vender_conta_id" in context.user_data:
+        return await _processar_venda_data(
+            update,
+            context,
+        )
 
+    if "vender_aguardando_comprador" in (
+        context.user_data
+    ):
+        return await _processar_venda_comprador(
+            update,
+            context,
+        )
+
+    return False
+
+
+async def _processar_venda_data(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
     if not update.message or not update.message.text:
         return True
 
@@ -2086,10 +2112,46 @@ async def processar_venda_conta(
         + timedelta(days=DIAS_VENCIMENTO_APOS_VENDA)
     ).strftime("%d/%m/%Y")
 
+    context.user_data.pop("vender_conta_id", None)
+    context.user_data["vender_aguardando_comprador"] = {
+        "conta_id": conta_id,
+        "data_venda_txt": data_venda_txt,
+        "data_vencimento_txt": data_vencimento_txt,
+    }
+
+    await update.message.reply_text(
+        "🙍 Nome do comprador/cliente (ou envie "
+        "\"pular\"):"
+    )
+
+    return True
+
+
+async def _processar_venda_comprador(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    if not update.message or not update.message.text:
+        return True
+
+    dados = context.user_data[
+        "vender_aguardando_comprador"
+    ]
+
+    texto = update.message.text.strip()
+    comprador = (
+        None if texto.lower() == "pular" else texto
+    )
+
+    conta_id = dados["conta_id"]
+    data_venda_txt = dados["data_venda_txt"]
+    data_vencimento_txt = dados["data_vencimento_txt"]
+
     alterado = marcar_conta_vendida(
         conta_id,
         data_venda_txt,
         data_vencimento_txt,
+        comprador=comprador,
     )
 
     context.user_data.clear()
@@ -2101,8 +2163,15 @@ async def processar_venda_conta(
         )
         return True
 
+    texto_comprador = (
+        f"🙍 Comprador: {comprador}\n"
+        if comprador
+        else ""
+    )
+
     await update.message.reply_text(
         f"✅ Venda registrada em {data_venda_txt}!\n"
+        f"{texto_comprador}"
         f"⏰ Vencimento automático: "
         f"{data_vencimento_txt} "
         f"({DIAS_VENCIMENTO_APOS_VENDA} dias)\n\n"
@@ -2271,6 +2340,7 @@ async def mostrar_detalhes_conta(
         data_vencimento,
         _vencimento_notificado_em,
         data_venda,
+        comprador,
     ) = conta
 
     texto_vencimento = data_vencimento or "—"
@@ -2319,6 +2389,7 @@ async def mostrar_detalhes_conta(
         f"🔑 Senha: {texto_senha}\n"
         f"🗓️ Criada em: {data_criacao or '—'}\n"
         f"🛒 Vendida em: {data_venda or '—'}\n"
+        f"🙍 Comprador: {comprador or '—'}\n"
         f"⏰ Vencimento: {texto_vencimento}\n"
         f"💰 Custo: "
         f"{f'R$ {custo_criacao:.2f}' if custo_criacao else '—'}\n"
@@ -4347,15 +4418,22 @@ async def comando_listar(
 
     for conta in contas[:CONTAS_POR_PAGINA]:
 
-        conta_id, servico, email, status = conta
-
-        emoji_status = (
-            "✅" if status == "ativa" else "⚫"
+        conta_id, servico, email, status, data_venda = (
+            conta
         )
+
+        if data_venda:
+            emoji_status = "🛒"
+        elif status == "ativa":
+            emoji_status = "✅"
+        else:
+            emoji_status = "⚫"
 
         rotulo = f"{emoji_status} {servico}"
 
-        if email:
+        if data_venda:
+            rotulo += f" (vendida {data_venda})"
+        elif email:
             rotulo += f" ({email[:20]})"
 
         botoes.append(
@@ -4379,7 +4457,8 @@ async def comando_listar(
 
     await update.message.reply_text(
         "📋 *LISTAR CONTAS*\n\n"
-        f"{len(contas)} conta(s) no total:",
+        f"{len(contas)} conta(s) no total "
+        f"(🛒 = vendida):",
         reply_markup=InlineKeyboardMarkup(
             botoes
         ),
