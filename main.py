@@ -2475,9 +2475,13 @@ async def mostrar_detalhes_conta(
         ],
         [
             InlineKeyboardButton(
+                "⬅️ Voltar pra lista",
+                callback_data="listar_1",
+            ),
+            InlineKeyboardButton(
                 "🏠 Menu",
                 callback_data="menu",
-            )
+            ),
         ],
     ]
 
