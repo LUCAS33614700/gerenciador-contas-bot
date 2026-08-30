@@ -1654,6 +1654,16 @@ async def mostrar_perfil_detalhe(
         botoes.append(
             [
                 InlineKeyboardButton(
+                    "✏️ Editar dados da venda",
+                    callback_data=(
+                        f"editarvenda_{perfil_id}"
+                    ),
+                )
+            ]
+        )
+        botoes.append(
+            [
+                InlineKeyboardButton(
                     "🟢 Liberar perfil",
                     callback_data=(
                         f"liberarperfil_{perfil_id}"
@@ -1730,6 +1740,40 @@ async def iniciar_ocupar_perfil(
     )
 
 
+async def iniciar_editar_venda_perfil(
+    query,
+    context,
+    perfil_id,
+):
+    context.user_data.clear()
+    context.user_data["ocupar_perfil_id"] = perfil_id
+    context.user_data["ocupar_passo"] = 0
+    context.user_data["ocupar_dados"] = {}
+    context.user_data["ocupar_editando"] = True
+
+    campo, pergunta = CAMPOS_OCUPAR_PERFIL[0]
+
+    await query.edit_message_text(
+        f"✏️ *EDITAR DADOS DA VENDA*\n\n"
+        "Vou repetir as perguntas — o que você "
+        "já tinha preenchido será substituído.\n\n"
+        f"{pergunta}:",
+        reply_markup=InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        "❌ Cancelar",
+                        callback_data=(
+                            f"perfil_{perfil_id}"
+                        ),
+                    )
+                ]
+            ]
+        ),
+        parse_mode="Markdown",
+    )
+
+
 async def processar_passo_ocupar_perfil(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
@@ -1786,6 +1830,9 @@ async def processar_passo_ocupar_perfil(
         return True
 
     dados = context.user_data["ocupar_dados"]
+    editando = context.user_data.get(
+        "ocupar_editando", False
+    )
 
     data_venda_valor = dados.get("data_venda", "")
     data_venc_valor = ""
@@ -1823,8 +1870,14 @@ async def processar_passo_ocupar_perfil(
         else ""
     )
 
+    mensagem_final = (
+        "✅ Dados da venda atualizados!\n"
+        if editando
+        else "✅ Perfil vinculado ao cliente!\n"
+    )
+
     await update.message.reply_text(
-        f"✅ Perfil vinculado ao cliente!\n"
+        f"{mensagem_final}"
         f"{aviso_vencimento}",
         reply_markup=InlineKeyboardMarkup(
             [
@@ -3911,6 +3964,25 @@ async def botoes(
             query,
             context,
             conta_id,
+        )
+        return
+
+    if acao.startswith("editarvenda_"):
+        try:
+            perfil_id = int(
+                acao.replace("editarvenda_", "", 1)
+            )
+        except ValueError:
+            await query.answer(
+                "❌ Perfil inválido.",
+                show_alert=True,
+            )
+            return
+
+        await iniciar_editar_venda_perfil(
+            query,
+            context,
+            perfil_id,
         )
         return
 
