@@ -1239,6 +1239,7 @@ def listar_vendas_por_cliente():
         data_vencimento,
         contato,
         valor_venda,     # float ou None
+        login,           # email/login da conta
     )
 
     Vendas sem nome de cliente vêm com nome vazio;
@@ -1260,7 +1261,8 @@ def listar_vendas_por_cliente():
             COALESCE(perfis.data_venda, ''),
             COALESCE(perfis.data_vencimento, ''),
             COALESCE(perfis.cliente_contato, ''),
-            perfis.valor_venda
+            perfis.valor_venda,
+            COALESCE(contas.email, '')
         FROM perfis
         JOIN contas ON contas.id = perfis.conta_id
         WHERE perfis.ocupado = 1
@@ -1277,7 +1279,8 @@ def listar_vendas_por_cliente():
             COALESCE(contas.data_venda, ''),
             COALESCE(contas.data_vencimento, ''),
             '',
-            contas.valor_venda
+            contas.valor_venda,
+            COALESCE(contas.email, '')
         FROM contas
         WHERE contas.data_venda IS NOT NULL
         AND TRIM(contas.data_venda) != ''

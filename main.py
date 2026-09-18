@@ -1326,6 +1326,7 @@ def agrupar_vendas_por_cliente():
         data_vencimento,
         contato,
         valor_venda,
+        login,
     ) in listar_vendas_por_cliente():
 
         nome = (cliente_nome or "").strip()
@@ -1357,6 +1358,7 @@ def agrupar_vendas_por_cliente():
                 "data_venda": data_venda,
                 "data_vencimento": data_vencimento,
                 "valor": valor_venda,
+                "login": (login or "").strip(),
                 "dias": dias,
                 "emoji": emoji,
                 "situacao": situacao,
@@ -1731,7 +1733,12 @@ def montar_mensagem_cobranca(cliente, pendentes):
         else:
             quando = f"vence em {item['data_vencimento']}"
 
-        linhas.append(f"• {titulo}: {quando}")
+        linha = f"• {titulo}: {quando}"
+
+        if item["login"]:
+            linha += f"\n   👤 Login: {item['login']}"
+
+        linhas.append(linha)
 
     total = sum(
         i["valor"] for i in pendentes if i["valor"] is not None
