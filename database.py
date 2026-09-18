@@ -110,6 +110,18 @@ def criar_tabelas():
     except sqlite3.OperationalError:
         pass
 
+    # -----------------------------------------------------
+    # VALOR DA VENDA (CONTA INTEIRA)
+    # -----------------------------------------------------
+
+    try:
+        cursor.execute("""
+            ALTER TABLE contas
+            ADD COLUMN valor_venda REAL
+        """)
+    except sqlite3.OperationalError:
+        pass
+
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS configuracoes (
             chave TEXT PRIMARY KEY,
@@ -163,6 +175,18 @@ def criar_tabelas():
             ALTER TABLE perfis
             ADD COLUMN vencimento_notificado_em
             TEXT
+        """)
+    except sqlite3.OperationalError:
+        pass
+
+    # -----------------------------------------------------
+    # VALOR DA VENDA (PERFIL/TELA)
+    # -----------------------------------------------------
+
+    try:
+        cursor.execute("""
+            ALTER TABLE perfis
+            ADD COLUMN valor_venda REAL
         """)
     except sqlite3.OperationalError:
         pass
@@ -934,6 +958,7 @@ def marcar_conta_vendida(
     data_venda,
     data_vencimento,
     comprador=None,
+    valor_venda=None,
 ):
     """
     Registra a data em que a conta (inteira) foi
@@ -941,38 +966,40 @@ def marcar_conta_vendida(
     (normalmente venda + 30 dias), sem apagar
     nenhum outro dado da conta. Zera o aviso de
     vencimento já enviado, pra recontar o prazo.
-    Comprador é opcional.
+    Comprador é opcional (None mantém o anterior).
+    O valor da venda é sempre regravado (None limpa),
+    pra não carregar o valor de uma venda antiga.
     """
 
     conn = conectar()
     cursor = conn.cursor()
 
+    campos = [
+        "data_venda = ?",
+        "data_vencimento = ?",
+        "vencimento_notificado_em = NULL",
+        "valor_venda = ?",
+    ]
+    valores = [
+        data_venda,
+        data_vencimento,
+        valor_venda,
+    ]
+
     if comprador is not None:
-        cursor.execute("""
-            UPDATE contas
-            SET data_venda = ?,
-                data_vencimento = ?,
-                vencimento_notificado_em = NULL,
-                comprador = ?
-            WHERE id = ?
-        """, (
-            data_venda,
-            data_vencimento,
-            comprador,
-            conta_id,
-        ))
-    else:
-        cursor.execute("""
-            UPDATE contas
-            SET data_venda = ?,
-                data_vencimento = ?,
-                vencimento_notificado_em = NULL
-            WHERE id = ?
-        """, (
-            data_venda,
-            data_vencimento,
-            conta_id,
-        ))
+        campos.append("comprador = ?")
+        valores.append(comprador)
+
+    valores.append(conta_id)
+
+    cursor.execute(
+        f"""
+        UPDATE contas
+        SET {', '.join(campos)}
+        WHERE id = ?
+        """,
+        valores,
+    )
 
     alterado = cursor.rowcount > 0
 
@@ -1037,6 +1064,161 @@ def marcar_vencimento_perfil_notificado(
 
 
 # =========================================================
+# VALOR DA VENDA / EDIÇÃO DE VENDAS
+# =========================================================
+
+def definir_valor_venda_perfil(
+    perfil_id,
+    valor,
+):
+    """valor = float, ou None pra limpar."""
+
+    conn = conectar()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        UPDATE perfis
+        SET valor_venda = ?
+        WHERE id = ?
+    """, (
+        valor,
+        perfil_id,
+    ))
+
+    alterado = cursor.rowcount > 0
+
+    conn.commit()
+    conn.close()
+
+    return alterado
+
+
+def definir_valor_venda_conta(
+    conta_id,
+    valor,
+):
+    """valor = float, ou None pra limpar."""
+
+    conn = conectar()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        UPDATE contas
+        SET valor_venda = ?
+        WHERE id = ?
+    """, (
+        valor,
+        conta_id,
+    ))
+
+    alterado = cursor.rowcount > 0
+
+    conn.commit()
+    conn.close()
+
+    return alterado
+
+
+def obter_valor_venda_perfil(
+    perfil_id,
+):
+
+    conn = conectar()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT valor_venda
+        FROM perfis
+        WHERE id = ?
+    """, (
+        perfil_id,
+    ))
+
+    linha = cursor.fetchone()
+
+    conn.close()
+
+    return linha[0] if linha else None
+
+
+def obter_valor_venda_conta(
+    conta_id,
+):
+
+    conn = conectar()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT valor_venda
+        FROM contas
+        WHERE id = ?
+    """, (
+        conta_id,
+    ))
+
+    linha = cursor.fetchone()
+
+    conn.close()
+
+    return linha[0] if linha else None
+
+
+def atualizar_comprador_conta(
+    conta_id,
+    comprador,
+):
+
+    conn = conectar()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        UPDATE contas
+        SET comprador = ?
+        WHERE id = ?
+    """, (
+        comprador,
+        conta_id,
+    ))
+
+    alterado = cursor.rowcount > 0
+
+    conn.commit()
+    conn.close()
+
+    return alterado
+
+
+def limpar_venda_conta(
+    conta_id,
+):
+    """
+    Desfaz a venda de uma conta inteira: limpa data da
+    venda, comprador e valor. Não mexe no vencimento nem
+    em nenhum outro dado da conta.
+    """
+
+    conn = conectar()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        UPDATE contas
+        SET data_venda = NULL,
+            comprador = NULL,
+            valor_venda = NULL
+        WHERE id = ?
+    """, (
+        conta_id,
+    ))
+
+    alterado = cursor.rowcount > 0
+
+    conn.commit()
+    conn.close()
+
+    return alterado
+
+
+# =========================================================
 # VENDAS POR CLIENTE
 # =========================================================
 
@@ -1056,6 +1238,7 @@ def listar_vendas_por_cliente():
         data_venda,
         data_vencimento,
         contato,
+        valor_venda,     # float ou None
     )
 
     Vendas sem nome de cliente vêm com nome vazio;
@@ -1076,7 +1259,8 @@ def listar_vendas_por_cliente():
             perfis.nome,
             COALESCE(perfis.data_venda, ''),
             COALESCE(perfis.data_vencimento, ''),
-            COALESCE(perfis.cliente_contato, '')
+            COALESCE(perfis.cliente_contato, ''),
+            perfis.valor_venda
         FROM perfis
         JOIN contas ON contas.id = perfis.conta_id
         WHERE perfis.ocupado = 1
@@ -1092,7 +1276,8 @@ def listar_vendas_por_cliente():
             COALESCE(contas.email, ''),
             COALESCE(contas.data_venda, ''),
             COALESCE(contas.data_vencimento, ''),
-            ''
+            '',
+            contas.valor_venda
         FROM contas
         WHERE contas.data_venda IS NOT NULL
         AND TRIM(contas.data_venda) != ''
@@ -1414,7 +1599,8 @@ def liberar_perfil(
             data_venda = NULL,
             observacoes = NULL,
             data_vencimento = NULL,
-            vencimento_notificado_em = NULL
+            vencimento_notificado_em = NULL,
+            valor_venda = NULL
         WHERE id = ?
     """, (
         perfil_id,

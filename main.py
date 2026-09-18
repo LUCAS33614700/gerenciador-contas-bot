@@ -59,6 +59,12 @@ from database import (
     duplicar_conta,
     listar_perfis_com_vencimento,
     listar_vendas_por_cliente,
+    definir_valor_venda_perfil,
+    definir_valor_venda_conta,
+    obter_valor_venda_perfil,
+    obter_valor_venda_conta,
+    atualizar_comprador_conta,
+    limpar_venda_conta,
     marcar_vencimento_perfil_notificado,
     existe_conta_igual,
     importar_conta_completa,
@@ -80,7 +86,7 @@ BACKUP_TASK = "backup_semanal_task"
 INTERVALO_BACKUP_SEGUNDOS = 7 * 24 * 60 * 60
 DIAS_VENCIMENTO_APOS_VENDA = 30
 CLIENTES_POR_PAGINA = 8
-MAX_ITENS_DETALHE_CLIENTE = 25
+MAX_ITENS_DETALHE_CLIENTE = 20
 
 CAMPOS_CADASTRO = [
     ("servico", "📺 Serviço (ex: Netflix, Disney+)"),
@@ -104,6 +110,35 @@ def parse_data_br(texto):
         return datetime.strptime(texto, "%d/%m/%Y").date()
     except ValueError:
         return None
+
+
+def parse_valor(texto):
+    """
+    Converte "25", "25.50", "25,50", "R$ 25,50" ou
+    "1.250,50" em float. Retorna None se inválido.
+    """
+    limpo = (
+        str(texto).strip().lower()
+        .replace("r$", "")
+        .replace(" ", "")
+    )
+
+    if "," in limpo:
+        limpo = limpo.replace(".", "").replace(",", ".")
+
+    try:
+        valor = float(limpo)
+    except ValueError:
+        return None
+
+    if valor < 0 or valor != valor:
+        return None
+
+    return valor
+
+
+def fmt_valor(valor):
+    return f"R$ {valor:.2f}" if valor is not None else "—"
 
 
 def is_admin(user_id):
@@ -1274,6 +1309,8 @@ def agrupar_vendas_por_cliente():
         "vencidos": int,
         "vencendo": int,
         "proximo_dias": int ou None,
+        "total": float,            # soma dos valores informados
+        "sem_valor": int,          # itens sem valor informado
     }
     """
     grupos = {}
@@ -1288,6 +1325,7 @@ def agrupar_vendas_por_cliente():
         data_venda,
         data_vencimento,
         contato,
+        valor_venda,
     ) in listar_vendas_por_cliente():
 
         nome = (cliente_nome or "").strip()
@@ -1318,6 +1356,7 @@ def agrupar_vendas_por_cliente():
                 "rotulo": rotulo,
                 "data_venda": data_venda,
                 "data_vencimento": data_vencimento,
+                "valor": valor_venda,
                 "dias": dias,
                 "emoji": emoji,
                 "situacao": situacao,
@@ -1352,6 +1391,14 @@ def agrupar_vendas_por_cliente():
         grupo["proximo_dias"] = (
             min(dias_validos) if dias_validos else None
         )
+        grupo["total"] = sum(
+            i["valor"]
+            for i in grupo["itens"]
+            if i["valor"] is not None
+        )
+        grupo["sem_valor"] = sum(
+            1 for i in grupo["itens"] if i["valor"] is None
+        )
 
         clientes.append(grupo)
 
@@ -1374,6 +1421,54 @@ def _emoji_cliente(cliente):
     if cliente["proximo_dias"] is None:
         return "⚪"
     return "🟢"
+
+
+def _titulo_item(item):
+    if item["tipo"] == "perfil":
+        return f"{item['servico']} — {item['rotulo']}"
+    return f"{item['servico']} (conta inteira)"
+
+
+def _resolver_cliente(context, indice):
+    """
+    Acha o cliente pelo índice da listagem. Usa o nome
+    salvo quando a lista foi exibida; se a lista mudou
+    (ou o bot reiniciou), cai pro índice atual.
+    """
+    clientes = agrupar_vendas_por_cliente()
+
+    nomes_salvos = context.user_data.get("clientes_nomes")
+
+    if nomes_salvos and 0 <= indice < len(nomes_salvos):
+        nome_alvo = nomes_salvos[indice].lower()
+        for cliente in clientes:
+            if cliente["nome"].lower() == nome_alvo:
+                return cliente
+
+    if 0 <= indice < len(clientes):
+        return clientes[indice]
+
+    return None
+
+
+async def _erro_cliente(query, texto):
+    await query.edit_message_text(
+        f"❌ {texto}",
+        reply_markup=InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        "🙍 Ver clientes",
+                        callback_data="clientes_1",
+                    ),
+                    InlineKeyboardButton(
+                        "🏠 Menu",
+                        callback_data="menu",
+                    ),
+                ]
+            ]
+        ),
+    )
 
 
 async def mostrar_clientes(
@@ -1418,12 +1513,20 @@ async def mostrar_clientes(
     total_itens = sum(len(c["itens"]) for c in clientes)
     total_vencidos = sum(c["vencidos"] for c in clientes)
     total_vencendo = sum(c["vencendo"] for c in clientes)
+    total_valor = sum(c["total"] for c in clientes)
+    total_sem_valor = sum(c["sem_valor"] for c in clientes)
+
+    linha_valor = f"💵 *Valor das vendas:* R$ {total_valor:.2f}"
+
+    if total_sem_valor:
+        linha_valor += f" · {total_sem_valor} sem valor"
 
     texto = (
         "🙍 *VENDAS POR CLIENTE*\n\n"
         "━━━━━━━━━━━━━━━━━━\n"
         f"👥 *Clientes:* {len(clientes)}\n"
         f"🛒 *Itens vendidos:* {total_itens}\n"
+        f"{linha_valor}\n"
         f"🔴 *Vencidos:* {total_vencidos}\n"
         f"🟡 *Vencendo (até {JANELA_VENCENDO_DIAS} dias):* "
         f"{total_vencendo}\n"
@@ -1489,32 +1592,12 @@ async def mostrar_cliente_detalhe(
     context,
     indice,
 ):
-    clientes = agrupar_vendas_por_cliente()
-
-    nomes_salvos = context.user_data.get("clientes_nomes")
-
-    # resolve pelo nome salvo na listagem; se a lista mudou
-    # (ou o bot reiniciou), cai pro índice atual
-    cliente = None
-
-    if nomes_salvos and 0 <= indice < len(nomes_salvos):
-        nome_alvo = nomes_salvos[indice].lower()
-        cliente = next(
-            (
-                c
-                for c in clientes
-                if c["nome"].lower() == nome_alvo
-            ),
-            None,
-        )
-
-    if cliente is None and 0 <= indice < len(clientes):
-        cliente = clientes[indice]
+    cliente = _resolver_cliente(context, indice)
 
     if cliente is None:
-        await query.answer(
-            "❌ Cliente não encontrado. Abra a lista de novo.",
-            show_alert=True,
+        await _erro_cliente(
+            query,
+            "Cliente não encontrado. Abra a lista de novo.",
         )
         return
 
@@ -1522,35 +1605,38 @@ async def mostrar_cliente_detalhe(
 
     itens = cliente["itens"]
 
-    texto = (
-        f"🙍 *{_md(cliente['nome'])}*\n"
-    )
+    texto = f"🙍 *{_md(cliente['nome'])}*\n"
 
     if cliente["contato"]:
         texto += f"📞 {_md(cliente['contato'])}\n"
 
     texto += (
         f"🛒 {len(itens)} item(ns) comprado(s)\n"
-        f"🔴 Vencidos: {cliente['vencidos']}  "
+        f"💵 Total: R$ {cliente['total']:.2f}"
+    )
+
+    if cliente["sem_valor"]:
+        texto += f" · {cliente['sem_valor']} sem valor"
+
+    texto += (
+        f"\n🔴 Vencidos: {cliente['vencidos']}  "
         f"🟡 Vencendo: {cliente['vencendo']}\n\n"
     )
 
     teclado = []
 
     for item in itens[:MAX_ITENS_DETALHE_CLIENTE]:
+        titulo = _titulo_item(item)
+
         if item["tipo"] == "perfil":
-            titulo = (
-                f"{item['servico']} — "
-                f"{item['rotulo']}"
-            )
             destino = f"perfil_{item['id']}"
         else:
-            titulo = f"{item['servico']} (conta inteira)"
             destino = f"conta_{item['id']}"
 
         texto += (
             f"{item['emoji']} *{_md(titulo)}*\n"
             f"🗓️ Venda: {item['data_venda'] or '—'}\n"
+            f"💵 Valor: {fmt_valor(item['valor'])}\n"
             f"⏰ Vencimento: "
             f"{item['data_vencimento'] or '—'} "
             f"({item['situacao']})\n\n"
@@ -1575,6 +1661,26 @@ async def mostrar_cliente_detalhe(
     teclado.append(
         [
             InlineKeyboardButton(
+                "💬 MENSAGEM DE COBRANÇA",
+                callback_data=f"cobrarcliente_{indice}",
+            )
+        ]
+    )
+    teclado.append(
+        [
+            InlineKeyboardButton(
+                "✏️ EDITAR CLIENTE",
+                callback_data=f"editcliente_{indice}",
+            ),
+            InlineKeyboardButton(
+                "🗑️ EXCLUIR",
+                callback_data=f"delcliente_{indice}",
+            ),
+        ]
+    )
+    teclado.append(
+        [
+            InlineKeyboardButton(
                 "⬅️ Voltar pra lista",
                 callback_data=f"clientes_{pagina_volta}",
             ),
@@ -1589,6 +1695,459 @@ async def mostrar_cliente_detalhe(
         texto,
         reply_markup=InlineKeyboardMarkup(teclado),
         parse_mode="Markdown",
+    )
+
+
+# ---------------------------------------------------------
+# MENSAGEM DE COBRANÇA
+# ---------------------------------------------------------
+
+def montar_mensagem_cobranca(cliente, pendentes):
+    nome = cliente["nome"]
+
+    tem_nome = (
+        not nome.startswith("(")
+        and sum(ch.isalpha() for ch in nome) >= 2
+    )
+
+    saudacao = (
+        f"Olá, {nome.split()[0]}! 👋"
+        if tem_nome
+        else "Olá! 👋"
+    )
+
+    linhas = []
+
+    for item in pendentes:
+        if item["tipo"] == "perfil":
+            titulo = f"{item['servico']} — {item['rotulo']}"
+        else:
+            titulo = item["servico"]
+
+        if item["dias"] < 0:
+            quando = f"venceu em {item['data_vencimento']}"
+        elif item["dias"] == 0:
+            quando = "vence hoje"
+        else:
+            quando = f"vence em {item['data_vencimento']}"
+
+        linhas.append(f"• {titulo}: {quando}")
+
+    total = sum(
+        i["valor"] for i in pendentes if i["valor"] is not None
+    )
+
+    mensagem = (
+        f"{saudacao}\n\n"
+        "Passando pra avisar sobre o vencimento do seu "
+        "acesso:\n\n"
+        + "\n".join(linhas)
+        + "\n"
+    )
+
+    if total > 0:
+        mensagem += f"\nValor da renovação: R$ {total:.2f}\n"
+
+    mensagem += "\nQuer renovar? 😊"
+
+    return mensagem
+
+
+async def enviar_mensagem_cobranca(
+    query,
+    context,
+    indice,
+):
+    cliente = _resolver_cliente(context, indice)
+
+    if cliente is None:
+        await _erro_cliente(
+            query,
+            "Cliente não encontrado. Abra a lista de novo.",
+        )
+        return
+
+    pendentes = [
+        i
+        for i in cliente["itens"]
+        if i["dias"] is not None
+        and i["dias"] <= JANELA_VENCENDO_DIAS
+    ]
+
+    voltar = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    "⬅️ Voltar ao cliente",
+                    callback_data=f"cliente_{indice}",
+                )
+            ]
+        ]
+    )
+
+    if not pendentes:
+        await query.message.reply_text(
+            "✅ Esse cliente não tem nada vencido nem "
+            f"vencendo nos próximos {JANELA_VENCENDO_DIAS} "
+            "dias — sem cobrança por enquanto.",
+            reply_markup=voltar,
+        )
+        return
+
+    await query.message.reply_text(
+        "💬 Mensagem pronta — toque e segure pra copiar:"
+    )
+
+    await query.message.reply_text(
+        montar_mensagem_cobranca(cliente, pendentes),
+        reply_markup=voltar,
+    )
+
+
+# ---------------------------------------------------------
+# EDITAR CLIENTE (nome, contato e valor de cada item)
+# ---------------------------------------------------------
+
+async def iniciar_editar_cliente(
+    query,
+    context,
+    indice,
+):
+    cliente = _resolver_cliente(context, indice)
+
+    if cliente is None:
+        await _erro_cliente(
+            query,
+            "Cliente não encontrado. Abra a lista de novo.",
+        )
+        return
+
+    context.user_data.clear()
+
+    context.user_data["editcli"] = {
+        "passo": "nome",
+        "indice_valor": 0,
+        "nome_novo": None,
+        "contato_novo": None,
+        "valores": {},
+        "itens": [
+            {
+                "tipo": i["tipo"],
+                "id": i["id"],
+                "titulo": _titulo_item(i),
+                "valor": i["valor"],
+            }
+            for i in cliente["itens"]
+        ],
+    }
+
+    await query.edit_message_text(
+        "✏️ EDITAR CLIENTE\n\n"
+        f"Nome atual: {cliente['nome']}\n\n"
+        "Envie o novo nome, ou \"manter\" pra deixar "
+        "como está.\n\n"
+        "As mudanças valem pra todos os itens desse "
+        "cliente.",
+        reply_markup=InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        "❌ Cancelar",
+                        callback_data=f"cliente_{indice}",
+                    )
+                ]
+            ]
+        ),
+    )
+
+
+def _pergunta_valor_edicao(estado):
+    item = estado["itens"][estado["indice_valor"]]
+
+    return (
+        f"💵 Valor de: {item['titulo']}\n"
+        f"Atual: {fmt_valor(item['valor'])}\n\n"
+        "Envie o novo valor (ex: 25 ou 25,50), "
+        "\"limpar\" pra apagar ou \"manter\"."
+    )
+
+
+async def processar_editar_cliente(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    estado = context.user_data.get("editcli")
+
+    if not estado:
+        return False
+
+    if not update.message or not update.message.text:
+        return True
+
+    texto = update.message.text.strip()
+    manter = texto.lower() == "manter"
+    passo = estado["passo"]
+    itens = estado["itens"]
+
+    if passo == "nome":
+        if not manter:
+            estado["nome_novo"] = texto
+
+        if any(i["tipo"] == "perfil" for i in itens):
+            estado["passo"] = "contato"
+
+            await update.message.reply_text(
+                "📞 Novo contato do cliente "
+                "(telefone/usuário).\n\n"
+                "Envie o contato, \"limpar\" pra apagar "
+                "ou \"manter\"."
+            )
+            return True
+
+        estado["passo"] = "valor"
+
+        await update.message.reply_text(
+            _pergunta_valor_edicao(estado)
+        )
+        return True
+
+    if passo == "contato":
+        if not manter:
+            estado["contato_novo"] = (
+                "" if texto.lower() == "limpar" else texto
+            )
+
+        estado["passo"] = "valor"
+
+        await update.message.reply_text(
+            _pergunta_valor_edicao(estado)
+        )
+        return True
+
+    # passo == "valor"
+    posicao = estado["indice_valor"]
+
+    if not manter:
+        if texto.lower() == "limpar":
+            estado["valores"][posicao] = None
+        else:
+            valor = parse_valor(texto)
+
+            if valor is None:
+                await update.message.reply_text(
+                    "❌ Valor inválido. Envie um número "
+                    "(ex: 25 ou 25,50), \"limpar\" ou "
+                    "\"manter\"."
+                )
+                return True
+
+            estado["valores"][posicao] = valor
+
+    estado["indice_valor"] += 1
+
+    if estado["indice_valor"] < len(itens):
+        await update.message.reply_text(
+            _pergunta_valor_edicao(estado)
+        )
+        return True
+
+    # terminou as perguntas: aplica tudo
+    nome_novo = estado["nome_novo"]
+    contato_novo = estado["contato_novo"]
+
+    for posicao_item, item in enumerate(itens):
+        if item["tipo"] == "perfil":
+            campos = {}
+
+            if nome_novo is not None:
+                campos["cliente_nome"] = nome_novo
+
+            if contato_novo is not None:
+                campos["cliente_contato"] = contato_novo
+
+            if campos:
+                atualizar_perfil(item["id"], **campos)
+
+            if posicao_item in estado["valores"]:
+                definir_valor_venda_perfil(
+                    item["id"],
+                    estado["valores"][posicao_item],
+                )
+        else:
+            if nome_novo is not None:
+                atualizar_comprador_conta(
+                    item["id"],
+                    nome_novo,
+                )
+
+            if posicao_item in estado["valores"]:
+                definir_valor_venda_conta(
+                    item["id"],
+                    estado["valores"][posicao_item],
+                )
+
+    context.user_data.clear()
+
+    await update.message.reply_text(
+        "✅ Cliente atualizado!",
+        reply_markup=InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        "🙍 Ver clientes",
+                        callback_data="clientes_1",
+                    )
+                ]
+            ]
+        ),
+    )
+
+    return True
+
+
+# ---------------------------------------------------------
+# EXCLUIR CLIENTE (desfaz as vendas dele)
+# ---------------------------------------------------------
+
+async def confirmar_excluir_cliente(
+    query,
+    context,
+    indice,
+):
+    cliente = _resolver_cliente(context, indice)
+
+    if cliente is None:
+        await _erro_cliente(
+            query,
+            "Cliente não encontrado. Abra a lista de novo.",
+        )
+        return
+
+    itens = [
+        (i["tipo"], i["id"]) for i in cliente["itens"]
+    ]
+
+    context.user_data["cliente_excluir"] = {
+        "nome": cliente["nome"],
+        "itens": itens,
+    }
+
+    qtd_perfis = sum(1 for tipo, _ in itens if tipo == "perfil")
+    qtd_contas = len(itens) - qtd_perfis
+
+    detalhes = ""
+
+    if qtd_perfis:
+        detalhes += (
+            f"• {qtd_perfis} perfil(is)/tela(s) volta(m) "
+            "a ficar livre(s)\n"
+        )
+
+    if qtd_contas:
+        detalhes += (
+            f"• {qtd_contas} conta(s) perde(m) a marca de "
+            "vendida (data, comprador e valor)\n"
+        )
+
+    await query.edit_message_text(
+        "🗑️ EXCLUIR CLIENTE\n\n"
+        f"Cliente: {cliente['nome']}\n\n"
+        "Isso desfaz todas as vendas dele:\n"
+        f"{detalhes}\n"
+        "As contas e os perfis continuam cadastrados — "
+        "só o vínculo com o cliente é apagado. "
+        "Confirma?",
+        reply_markup=InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        "✅ Sim, excluir",
+                        callback_data="confdelcliente",
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        "❌ Cancelar",
+                        callback_data=f"cliente_{indice}",
+                    )
+                ],
+            ]
+        ),
+    )
+
+
+async def executar_excluir_cliente(
+    query,
+    context,
+):
+    pendente = context.user_data.pop("cliente_excluir", None)
+
+    if not pendente:
+        await _erro_cliente(
+            query,
+            "Essa confirmação expirou. Abra o cliente "
+            "de novo e tente outra vez.",
+        )
+        return
+
+    for tipo, item_id in pendente["itens"]:
+        if tipo == "perfil":
+            liberar_perfil(item_id)
+        else:
+            limpar_venda_conta(item_id)
+
+    await query.edit_message_text(
+        f"✅ Vendas de {pendente['nome']} removidas "
+        f"({len(pendente['itens'])} item(ns)).",
+        reply_markup=InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        "🙍 Ver clientes",
+                        callback_data="clientes_1",
+                    ),
+                    InlineKeyboardButton(
+                        "🏠 Menu",
+                        callback_data="menu",
+                    ),
+                ]
+            ]
+        ),
+    )
+
+
+# ---------------------------------------------------------
+# REMOVER VENDA DE UMA CONTA INTEIRA
+# ---------------------------------------------------------
+
+async def confirmar_remover_venda_conta(
+    query,
+    conta_id,
+):
+    await query.edit_message_text(
+        "🧹 REMOVER VENDA\n\n"
+        "Vou apagar a data da venda, o comprador e o "
+        "valor desta conta. O vencimento e o resto dos "
+        "dados ficam como estão.\n\n"
+        "Confirma?",
+        reply_markup=InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        "✅ Sim, remover",
+                        callback_data=(
+                            f"confremovervenda_{conta_id}"
+                        ),
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        "❌ Cancelar",
+                        callback_data=f"conta_{conta_id}",
+                    )
+                ],
+            ]
+        ),
     )
 
 
@@ -1873,6 +2432,11 @@ CAMPOS_OCUPAR_PERFIL = [
         "\"hoje\", ou \"pular\")",
     ),
     (
+        "valor_venda",
+        "💵 Valor da venda (ex: 25 ou 25,50, "
+        "ou envie \"pular\")",
+    ),
+    (
         "observacoes",
         "📝 Observações (ou envie \"pular\")",
     ),
@@ -2002,6 +2566,7 @@ async def mostrar_perfil_detalhe(
     botoes = []
 
     if ocupado:
+        valor_perfil = obter_valor_venda_perfil(perfil_id)
         texto_vencimento = data_vencimento or "—"
         venc_obj = (
             parse_data_br(data_vencimento)
@@ -2030,6 +2595,7 @@ async def mostrar_perfil_detalhe(
             f"🙍 Cliente: {cliente_nome or '—'}\n"
             f"📞 Contato: {cliente_contato or '—'}\n"
             f"🗓️ Venda: {data_venda or '—'}\n"
+            f"💵 Valor: {fmt_valor(valor_perfil)}\n"
             f"⏰ Vencimento: {texto_vencimento}\n"
             f"📝 Obs: {observacoes or '—'}\n"
         )
@@ -2192,6 +2758,20 @@ async def processar_passo_ocupar_perfil(
             return True
         else:
             valor = texto
+    elif campo == "valor_venda":
+        if texto.lower() == "pular":
+            valor = ""
+        else:
+            valor_num = parse_valor(texto)
+
+            if valor_num is None:
+                await update.message.reply_text(
+                    "❌ Valor inválido. Envie um número "
+                    "(ex: 25 ou 25,50) ou \"pular\"."
+                )
+                return True
+
+            valor = str(valor_num)
     else:
         valor = "" if texto.lower() == "pular" else texto
 
@@ -2243,6 +2823,15 @@ async def processar_passo_ocupar_perfil(
         data_vencimento=data_venc_valor,
     )
 
+    valor_txt = dados.get("valor_venda", "")
+    valor_final = (
+        float(valor_txt)
+        if valor_txt not in ("", None)
+        else None
+    )
+
+    definir_valor_venda_perfil(perfil_id, valor_final)
+
     context.user_data.clear()
 
     aviso_vencimento = (
@@ -2258,8 +2847,15 @@ async def processar_passo_ocupar_perfil(
         else "✅ Perfil vinculado ao cliente!\n"
     )
 
+    aviso_valor = (
+        f"💵 Valor: {fmt_valor(valor_final)}\n"
+        if valor_final is not None
+        else ""
+    )
+
     await update.message.reply_text(
         f"{mensagem_final}"
+        f"{aviso_valor}"
         f"{aviso_vencimento}",
         reply_markup=InlineKeyboardMarkup(
             [
@@ -2514,6 +3110,14 @@ async def processar_venda_conta(
             context,
         )
 
+    if "vender_aguardando_valor" in (
+        context.user_data
+    ):
+        return await _processar_venda_valor(
+            update,
+            context,
+        )
+
     return False
 
 
@@ -2569,24 +3173,60 @@ async def _processar_venda_comprador(
     if not update.message or not update.message.text:
         return True
 
-    dados = context.user_data[
+    dados = context.user_data.pop(
         "vender_aguardando_comprador"
-    ]
+    )
 
     texto = update.message.text.strip()
-    comprador = (
+
+    dados["comprador"] = (
         None if texto.lower() == "pular" else texto
     )
+
+    context.user_data["vender_aguardando_valor"] = dados
+
+    await update.message.reply_text(
+        "💵 Valor da venda (ex: 25 ou 25,50, ou envie "
+        "\"pular\"):"
+    )
+
+    return True
+
+
+async def _processar_venda_valor(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    if not update.message or not update.message.text:
+        return True
+
+    dados = context.user_data["vender_aguardando_valor"]
+
+    texto = update.message.text.strip()
+
+    if texto.lower() == "pular":
+        valor = None
+    else:
+        valor = parse_valor(texto)
+
+        if valor is None:
+            await update.message.reply_text(
+                "❌ Valor inválido. Envie um número "
+                "(ex: 25 ou 25,50) ou \"pular\"."
+            )
+            return True
 
     conta_id = dados["conta_id"]
     data_venda_txt = dados["data_venda_txt"]
     data_vencimento_txt = dados["data_vencimento_txt"]
+    comprador = dados["comprador"]
 
     alterado = marcar_conta_vendida(
         conta_id,
         data_venda_txt,
         data_vencimento_txt,
         comprador=comprador,
+        valor_venda=valor,
     )
 
     context.user_data.clear()
@@ -2604,9 +3244,16 @@ async def _processar_venda_comprador(
         else ""
     )
 
+    texto_valor = (
+        f"💵 Valor: {fmt_valor(valor)}\n"
+        if valor is not None
+        else ""
+    )
+
     await update.message.reply_text(
         f"✅ Venda registrada em {data_venda_txt}!\n"
         f"{texto_comprador}"
+        f"{texto_valor}"
         f"⏰ Vencimento automático: "
         f"{data_vencimento_txt} "
         f"({DIAS_VENCIMENTO_APOS_VENDA} dias)\n\n"
@@ -2801,6 +3448,8 @@ async def mostrar_detalhes_conta(
                 f"dia(s))"
             )
 
+    valor_venda_conta = obter_valor_venda_conta(conta_id)
+
     emoji_status = (
         "✅ Ativa" if status == "ativa" else "⚫ Inativa"
     )
@@ -2825,6 +3474,7 @@ async def mostrar_detalhes_conta(
         f"🗓️ Criada em: {data_criacao or '—'}\n"
         f"🛒 Vendida em: {data_venda or '—'}\n"
         f"🙍 Comprador: {comprador or '—'}\n"
+        f"💵 Valor da venda: {fmt_valor(valor_venda_conta)}\n"
         f"⏰ Vencimento: {texto_vencimento}\n"
         f"💰 Custo: "
         f"{f'R$ {custo_criacao:.2f}' if custo_criacao else '—'}\n"
@@ -2888,10 +3538,28 @@ async def mostrar_detalhes_conta(
         ],
         [
             InlineKeyboardButton(
-                "🛒 MARCAR COMO VENDIDA",
+                (
+                    "✏️ EDITAR VENDA"
+                    if data_venda
+                    else "🛒 MARCAR COMO VENDIDA"
+                ),
                 callback_data=f"vender_{conta_id}",
             )
         ],
+        *(
+            [
+                [
+                    InlineKeyboardButton(
+                        "🧹 REMOVER VENDA",
+                        callback_data=(
+                            f"removervenda_{conta_id}"
+                        ),
+                    )
+                ]
+            ]
+            if data_venda
+            else []
+        ),
         [
             InlineKeyboardButton(
                 (
@@ -3924,6 +4592,12 @@ async def processar_mensagem_texto(
     ):
         return
 
+    if await processar_editar_cliente(
+        update,
+        context,
+    ):
+        return
+
 
 # =========================================================
 # BOTÕES (ROTEADOR)
@@ -3948,6 +4622,11 @@ async def botoes(
     await query.answer()
 
     acao = query.data or ""
+
+    # sair da edição de cliente por qualquer outro botão
+    # cancela o fluxo (senão o próximo texto seria capturado)
+    if not acao.startswith("editcliente_"):
+        context.user_data.pop("editcli", None)
 
     if acao == "menu":
         context.user_data.clear()
@@ -4634,6 +5313,99 @@ async def botoes(
             query,
             context,
             indice,
+        )
+        return
+
+    if acao.startswith("editcliente_"):
+        try:
+            indice = int(
+                acao.replace("editcliente_", "", 1)
+            )
+        except ValueError:
+            await _erro_cliente(query, "Cliente inválido.")
+            return
+
+        await iniciar_editar_cliente(
+            query,
+            context,
+            indice,
+        )
+        return
+
+    if acao.startswith("delcliente_"):
+        try:
+            indice = int(
+                acao.replace("delcliente_", "", 1)
+            )
+        except ValueError:
+            await _erro_cliente(query, "Cliente inválido.")
+            return
+
+        await confirmar_excluir_cliente(
+            query,
+            context,
+            indice,
+        )
+        return
+
+    if acao == "confdelcliente":
+        await executar_excluir_cliente(
+            query,
+            context,
+        )
+        return
+
+    if acao.startswith("cobrarcliente_"):
+        try:
+            indice = int(
+                acao.replace("cobrarcliente_", "", 1)
+            )
+        except ValueError:
+            await _erro_cliente(query, "Cliente inválido.")
+            return
+
+        await enviar_mensagem_cobranca(
+            query,
+            context,
+            indice,
+        )
+        return
+
+    if acao.startswith("removervenda_"):
+        try:
+            conta_id = int(
+                acao.replace("removervenda_", "", 1)
+            )
+        except ValueError:
+            await query.answer(
+                "❌ Conta inválida.",
+                show_alert=True,
+            )
+            return
+
+        await confirmar_remover_venda_conta(
+            query,
+            conta_id,
+        )
+        return
+
+    if acao.startswith("confremovervenda_"):
+        try:
+            conta_id = int(
+                acao.replace("confremovervenda_", "", 1)
+            )
+        except ValueError:
+            await query.answer(
+                "❌ Conta inválida.",
+                show_alert=True,
+            )
+            return
+
+        limpar_venda_conta(conta_id)
+
+        await mostrar_detalhes_conta(
+            query,
+            conta_id,
         )
         return
 

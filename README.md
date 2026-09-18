@@ -30,10 +30,19 @@ automático de verificação.
 - **📋 Listar Contas** — lista paginada de tudo, toque numa
   conta pra ver detalhes/editar/excluir/marcar como verificada.
 - **🙍 Vendas por Cliente** — lista os clientes que já
-  compraram (telas/perfis e contas inteiras), com contagem de
-  itens vencidos e vencendo. Toque num cliente pra ver tudo
-  que ele comprou, datas de venda e vencimento, e abrir o
-  perfil/conta direto.
+  compraram (telas/perfis e contas inteiras), com o valor
+  das vendas e a contagem de itens vencidos e vencendo.
+  Toque num cliente pra ver tudo que ele comprou e:
+  - **💬 Mensagem de cobrança** — gera um texto pronto pra
+    copiar com o que está vencido/vencendo e o valor;
+  - **✏️ Editar cliente** — muda nome, contato e o valor de
+    cada item de uma vez;
+  - **🗑️ Excluir** — desfaz todas as vendas do cliente
+    (perfis voltam a ficar livres; as contas continuam
+    cadastradas).
+  O valor da venda é perguntado ao marcar um perfil ou uma
+  conta como vendida (pode pular). Numa conta vendida,
+  **🧹 Remover venda** desfaz só a venda dela.
 - **🔍 Buscar** — procura por serviço, email ou fornecedor.
 - **⚙️ Intervalo de Verificação** — de quanto em quanto tempo
   (em dias) você quer ser lembrado de checar se cada conta
