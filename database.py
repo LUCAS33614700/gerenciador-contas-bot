@@ -1037,6 +1037,75 @@ def marcar_vencimento_perfil_notificado(
 
 
 # =========================================================
+# VENDAS POR CLIENTE
+# =========================================================
+
+def listar_vendas_por_cliente():
+    """
+    Retorna todas as vendas registradas, tanto de
+    telas/perfis (ocupados) quanto de contas inteiras
+    (com data de venda), uma linha por item vendido:
+
+    (
+        cliente_nome,
+        tipo,            # 'perfil' ou 'conta'
+        item_id,         # id do perfil ou da conta
+        conta_id,
+        servico,
+        rotulo,          # nome do perfil ou email da conta
+        data_venda,
+        data_vencimento,
+        contato,
+    )
+
+    Vendas sem nome de cliente vêm com nome vazio;
+    o agrupamento e o texto de exibição ficam por
+    conta do main.py.
+    """
+
+    conn = conectar()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT
+            COALESCE(TRIM(perfis.cliente_nome), ''),
+            'perfil',
+            perfis.id,
+            perfis.conta_id,
+            contas.servico,
+            perfis.nome,
+            COALESCE(perfis.data_venda, ''),
+            COALESCE(perfis.data_vencimento, ''),
+            COALESCE(perfis.cliente_contato, '')
+        FROM perfis
+        JOIN contas ON contas.id = perfis.conta_id
+        WHERE perfis.ocupado = 1
+
+        UNION ALL
+
+        SELECT
+            COALESCE(TRIM(contas.comprador), ''),
+            'conta',
+            contas.id,
+            contas.id,
+            contas.servico,
+            COALESCE(contas.email, ''),
+            COALESCE(contas.data_venda, ''),
+            COALESCE(contas.data_vencimento, ''),
+            ''
+        FROM contas
+        WHERE contas.data_venda IS NOT NULL
+        AND TRIM(contas.data_venda) != ''
+    """)
+
+    resultados = cursor.fetchall()
+
+    conn.close()
+
+    return resultados
+
+
+# =========================================================
 # EXPORTAÇÃO (CSV)
 # =========================================================
 

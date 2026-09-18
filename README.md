@@ -29,6 +29,11 @@ automático de verificação.
   observações). Pode pular qualquer campo digitando `pular`.
 - **📋 Listar Contas** — lista paginada de tudo, toque numa
   conta pra ver detalhes/editar/excluir/marcar como verificada.
+- **🙍 Vendas por Cliente** — lista os clientes que já
+  compraram (telas/perfis e contas inteiras), com contagem de
+  itens vencidos e vencendo. Toque num cliente pra ver tudo
+  que ele comprou, datas de venda e vencimento, e abrir o
+  perfil/conta direto.
 - **🔍 Buscar** — procura por serviço, email ou fornecedor.
 - **⚙️ Intervalo de Verificação** — de quanto em quanto tempo
   (em dias) você quer ser lembrado de checar se cada conta

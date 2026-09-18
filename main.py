@@ -58,6 +58,7 @@ from database import (
     excluir_perfil,
     duplicar_conta,
     listar_perfis_com_vencimento,
+    listar_vendas_por_cliente,
     marcar_vencimento_perfil_notificado,
     existe_conta_igual,
     importar_conta_completa,
@@ -78,6 +79,8 @@ JANELA_VENCENDO_DIAS = 7
 BACKUP_TASK = "backup_semanal_task"
 INTERVALO_BACKUP_SEGUNDOS = 7 * 24 * 60 * 60
 DIAS_VENCIMENTO_APOS_VENDA = 30
+CLIENTES_POR_PAGINA = 8
+MAX_ITENS_DETALHE_CLIENTE = 25
 
 CAMPOS_CADASTRO = [
     ("servico", "📺 Serviço (ex: Netflix, Disney+)"),
@@ -189,6 +192,12 @@ def menu_principal():
                 InlineKeyboardButton(
                     "💰 RESUMO DE CUSTOS",
                     callback_data="resumo_custos",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "🙍 VENDAS POR CLIENTE",
+                    callback_data="clientes_1",
                 )
             ],
             [
@@ -1206,6 +1215,379 @@ async def mostrar_resumo_custos(
                 ]
             ]
         ),
+        parse_mode="Markdown",
+    )
+
+
+# =========================================================
+# VENDAS POR CLIENTE
+# =========================================================
+
+def _md(texto):
+    """Escapa caracteres do Markdown do Telegram."""
+    texto = str(texto or "")
+    for ch in ("_", "*", "`", "["):
+        texto = texto.replace(ch, "\\" + ch)
+    return texto
+
+
+def _situacao_vencimento(data_vencimento):
+    """
+    Retorna (dias_restantes, emoji, texto) a partir da
+    data de vencimento (DD/MM/AAAA). Se não houver data
+    válida, dias_restantes vem None.
+    """
+    venc_obj = (
+        parse_data_br(data_vencimento)
+        if data_vencimento
+        else None
+    )
+
+    if not venc_obj:
+        return None, "⚪", "sem vencimento"
+
+    dias = (venc_obj - date.today()).days
+
+    if dias < 0:
+        return dias, "🔴", f"vencido há {abs(dias)} dia(s)"
+
+    if dias == 0:
+        return dias, "🟠", "vence hoje"
+
+    if dias <= JANELA_VENCENDO_DIAS:
+        return dias, "🟡", f"vence em {dias} dia(s)"
+
+    return dias, "🟢", f"vence em {dias} dia(s)"
+
+
+def agrupar_vendas_por_cliente():
+    """
+    Junta as vendas de perfis e de contas inteiras por
+    cliente (sem diferenciar maiúsculas/minúsculas) e
+    devolve uma lista ordenada por nome, cada item no
+    formato:
+
+    {
+        "nome": str,
+        "contato": str,
+        "itens": [ {...}, ... ],   # do mais urgente ao menos
+        "vencidos": int,
+        "vencendo": int,
+        "proximo_dias": int ou None,
+    }
+    """
+    grupos = {}
+
+    for (
+        cliente_nome,
+        tipo,
+        item_id,
+        conta_id,
+        servico,
+        rotulo,
+        data_venda,
+        data_vencimento,
+        contato,
+    ) in listar_vendas_por_cliente():
+
+        nome = (cliente_nome or "").strip()
+        chave = nome.lower() if nome else ""
+
+        if chave not in grupos:
+            grupos[chave] = {
+                "nome": nome or "(sem nome informado)",
+                "contato": "",
+                "itens": [],
+            }
+
+        grupo = grupos[chave]
+
+        if contato and not grupo["contato"]:
+            grupo["contato"] = contato
+
+        dias, emoji, situacao = _situacao_vencimento(
+            data_vencimento
+        )
+
+        grupo["itens"].append(
+            {
+                "tipo": tipo,
+                "id": item_id,
+                "conta_id": conta_id,
+                "servico": servico,
+                "rotulo": rotulo,
+                "data_venda": data_venda,
+                "data_vencimento": data_vencimento,
+                "dias": dias,
+                "emoji": emoji,
+                "situacao": situacao,
+            }
+        )
+
+    clientes = []
+
+    for grupo in grupos.values():
+        # sem vencimento vai pro fim; vencidos primeiro
+        grupo["itens"].sort(
+            key=lambda i: (
+                i["dias"] is None,
+                i["dias"] if i["dias"] is not None else 0,
+            )
+        )
+
+        dias_validos = [
+            i["dias"]
+            for i in grupo["itens"]
+            if i["dias"] is not None
+        ]
+
+        grupo["vencidos"] = sum(
+            1 for d in dias_validos if d < 0
+        )
+        grupo["vencendo"] = sum(
+            1
+            for d in dias_validos
+            if 0 <= d <= JANELA_VENCENDO_DIAS
+        )
+        grupo["proximo_dias"] = (
+            min(dias_validos) if dias_validos else None
+        )
+
+        clientes.append(grupo)
+
+    # clientes sem nome vão pro fim da lista
+    clientes.sort(
+        key=lambda c: (
+            c["nome"].startswith("("),
+            c["nome"].lower(),
+        )
+    )
+
+    return clientes
+
+
+def _emoji_cliente(cliente):
+    if cliente["vencidos"]:
+        return "🔴"
+    if cliente["vencendo"]:
+        return "🟡"
+    if cliente["proximo_dias"] is None:
+        return "⚪"
+    return "🟢"
+
+
+async def mostrar_clientes(
+    query,
+    context,
+    pagina=1,
+):
+    clientes = agrupar_vendas_por_cliente()
+
+    botao_menu = [
+        InlineKeyboardButton(
+            "🏠 Menu",
+            callback_data="menu",
+        )
+    ]
+
+    if not clientes:
+        await query.edit_message_text(
+            "🙍 *VENDAS POR CLIENTE*\n\n"
+            "Nenhuma venda registrada ainda.\n\n"
+            "Marque uma conta como vendida ou vincule "
+            "um perfil a um cliente que ele aparece aqui.",
+            reply_markup=InlineKeyboardMarkup([botao_menu]),
+            parse_mode="Markdown",
+        )
+        return
+
+    context.user_data["clientes_nomes"] = [
+        c["nome"] for c in clientes
+    ]
+
+    total_paginas = max(
+        1,
+        (len(clientes) + CLIENTES_POR_PAGINA - 1)
+        // CLIENTES_POR_PAGINA,
+    )
+    pagina = min(max(1, pagina), total_paginas)
+
+    inicio = (pagina - 1) * CLIENTES_POR_PAGINA
+    fatia = clientes[inicio:inicio + CLIENTES_POR_PAGINA]
+
+    total_itens = sum(len(c["itens"]) for c in clientes)
+    total_vencidos = sum(c["vencidos"] for c in clientes)
+    total_vencendo = sum(c["vencendo"] for c in clientes)
+
+    texto = (
+        "🙍 *VENDAS POR CLIENTE*\n\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        f"👥 *Clientes:* {len(clientes)}\n"
+        f"🛒 *Itens vendidos:* {total_itens}\n"
+        f"🔴 *Vencidos:* {total_vencidos}\n"
+        f"🟡 *Vencendo (até {JANELA_VENCENDO_DIAS} dias):* "
+        f"{total_vencendo}\n"
+        "━━━━━━━━━━━━━━━━━━\n\n"
+        "Toque num cliente pra ver o que ele comprou:"
+    )
+
+    teclado = []
+
+    for posicao, cliente in enumerate(fatia):
+        indice = inicio + posicao
+        qtd = len(cliente["itens"])
+
+        rotulo = (
+            f"{_emoji_cliente(cliente)} "
+            f"{cliente['nome'][:30]} ({qtd})"
+        )
+
+        teclado.append(
+            [
+                InlineKeyboardButton(
+                    rotulo,
+                    callback_data=f"cliente_{indice}",
+                )
+            ]
+        )
+
+    navegacao = []
+
+    if pagina > 1:
+        navegacao.append(
+            InlineKeyboardButton(
+                "⬅️ Anterior",
+                callback_data=f"clientes_{pagina - 1}",
+            )
+        )
+
+    if pagina < total_paginas:
+        navegacao.append(
+            InlineKeyboardButton(
+                "Próxima ➡️",
+                callback_data=f"clientes_{pagina + 1}",
+            )
+        )
+
+    if navegacao:
+        teclado.append(navegacao)
+
+    teclado.append(botao_menu)
+
+    if total_paginas > 1:
+        texto += f"\n\nPágina {pagina}/{total_paginas}"
+
+    await query.edit_message_text(
+        texto,
+        reply_markup=InlineKeyboardMarkup(teclado),
+        parse_mode="Markdown",
+    )
+
+
+async def mostrar_cliente_detalhe(
+    query,
+    context,
+    indice,
+):
+    clientes = agrupar_vendas_por_cliente()
+
+    nomes_salvos = context.user_data.get("clientes_nomes")
+
+    # resolve pelo nome salvo na listagem; se a lista mudou
+    # (ou o bot reiniciou), cai pro índice atual
+    cliente = None
+
+    if nomes_salvos and 0 <= indice < len(nomes_salvos):
+        nome_alvo = nomes_salvos[indice].lower()
+        cliente = next(
+            (
+                c
+                for c in clientes
+                if c["nome"].lower() == nome_alvo
+            ),
+            None,
+        )
+
+    if cliente is None and 0 <= indice < len(clientes):
+        cliente = clientes[indice]
+
+    if cliente is None:
+        await query.answer(
+            "❌ Cliente não encontrado. Abra a lista de novo.",
+            show_alert=True,
+        )
+        return
+
+    pagina_volta = indice // CLIENTES_POR_PAGINA + 1
+
+    itens = cliente["itens"]
+
+    texto = (
+        f"🙍 *{_md(cliente['nome'])}*\n"
+    )
+
+    if cliente["contato"]:
+        texto += f"📞 {_md(cliente['contato'])}\n"
+
+    texto += (
+        f"🛒 {len(itens)} item(ns) comprado(s)\n"
+        f"🔴 Vencidos: {cliente['vencidos']}  "
+        f"🟡 Vencendo: {cliente['vencendo']}\n\n"
+    )
+
+    teclado = []
+
+    for item in itens[:MAX_ITENS_DETALHE_CLIENTE]:
+        if item["tipo"] == "perfil":
+            titulo = (
+                f"{item['servico']} — "
+                f"{item['rotulo']}"
+            )
+            destino = f"perfil_{item['id']}"
+        else:
+            titulo = f"{item['servico']} (conta inteira)"
+            destino = f"conta_{item['id']}"
+
+        texto += (
+            f"{item['emoji']} *{_md(titulo)}*\n"
+            f"🗓️ Venda: {item['data_venda'] or '—'}\n"
+            f"⏰ Vencimento: "
+            f"{item['data_vencimento'] or '—'} "
+            f"({item['situacao']})\n\n"
+        )
+
+        teclado.append(
+            [
+                InlineKeyboardButton(
+                    titulo[:60],
+                    callback_data=destino,
+                )
+            ]
+        )
+
+    if len(itens) > MAX_ITENS_DETALHE_CLIENTE:
+        texto += (
+            f"… e mais "
+            f"{len(itens) - MAX_ITENS_DETALHE_CLIENTE} "
+            f"item(ns).\n"
+        )
+
+    teclado.append(
+        [
+            InlineKeyboardButton(
+                "⬅️ Voltar pra lista",
+                callback_data=f"clientes_{pagina_volta}",
+            ),
+            InlineKeyboardButton(
+                "🏠 Menu",
+                callback_data="menu",
+            ),
+        ]
+    )
+
+    await query.edit_message_text(
+        texto,
+        reply_markup=InlineKeyboardMarkup(teclado),
         parse_mode="Markdown",
     )
 
@@ -4218,6 +4600,40 @@ async def botoes(
         await mostrar_resumo_custos(
             query,
             context,
+        )
+        return
+
+    if acao.startswith("clientes_"):
+        try:
+            pagina = int(
+                acao.replace("clientes_", "", 1)
+            )
+        except ValueError:
+            pagina = 1
+
+        await mostrar_clientes(
+            query,
+            context,
+            pagina,
+        )
+        return
+
+    if acao.startswith("cliente_"):
+        try:
+            indice = int(
+                acao.replace("cliente_", "", 1)
+            )
+        except ValueError:
+            await query.answer(
+                "❌ Cliente inválido.",
+                show_alert=True,
+            )
+            return
+
+        await mostrar_cliente_detalhe(
+            query,
+            context,
+            indice,
         )
         return
 
